@@ -2,7 +2,6 @@ import { generateKeyPair, createDID, signData } from '../utils/crypto';
 import * as secureStorage from './secureStorage';
 import apiClient from './api';
 import logger from '../utils/logger';
-// ❌ REMOVE: import { ethers } from 'ethers';
 import API_CONFIG from '../config/config';
 
 /**

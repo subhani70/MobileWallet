@@ -14,15 +14,13 @@ import {
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as didManager from '../services/didManager';
-import * as secureStorage from '../services/secureStorage';
-import { vcAPI } from '../services/api';
 import logger from '../utils/logger';
+import * as vcService from '../services/vcService';
 
 export default function IssueCredentialScreen() {
   const [walletInfo, setWalletInfo] = useState(null);
   const [isIssuing, setIsIssuing] = useState(false);
   
-  // Form fields
   const [credentialType, setCredentialType] = useState('');
   const [claimKey, setClaimKey] = useState('');
   const [claimValue, setClaimValue] = useState('');
@@ -49,115 +47,46 @@ export default function IssueCredentialScreen() {
     setAdditionalClaims(additionalClaims.filter((_, i) => i !== index));
   };
 
-//   const issueCredential = async () => {
-//     if (!walletInfo?.did) {
-//       Alert.alert('Error', 'No DID found. Create your identity first.');
-//       return;
-//     }
-
-//     if (additionalClaims.length === 0) {
-//       Alert.alert('Error', 'Add at least one claim to the credential.');
-//       return;
-//     }
-
-//     setIsIssuing(true);
-
-//     try {
-//       // Build claims object
-//       const claims = {};
-//       additionalClaims.forEach(claim => {
-//         claims[claim.key] = claim.value;
-//       });
-
-//       if (credentialType) {
-//         claims.type = credentialType;
-//       }
-
-//       // Issue credential to yourself (self-issued)
-//       const result = await vcAPI.issue(
-//         walletInfo.did, // issuer (you)
-//         walletInfo.did, // subject (you)
-//         claims
-//       );
-
-//       // Store in local wallet
-//       await secureStorage.addCredential(result);
-
-//       Alert.alert(
-//         'Success',
-//         'Credential issued and added to your wallet!',
-//         [{ text: 'OK', onPress: () => resetForm() }]
-//       );
-
-//       logger.success('Credential issued successfully');
-//     } catch (error) {
-//       logger.error(`Failed to issue credential: ${error.message}`);
-//       Alert.alert('Error', 'Failed to issue credential. Check backend connection.');
-//     } finally {
-//       setIsIssuing(false);
-//     }
-//   };
-
-const issueCredential = async () => {
-  if (!walletInfo?.did) {
-    Alert.alert('Error', 'No DID found. Create your identity first.');
-    return;
-  }
-
-  if (additionalClaims.length === 0) {
-    Alert.alert('Error', 'Add at least one claim to the credential.');
-    return;
-  }
-
-  setIsIssuing(true);
-
-  try {
-    // Build claims object
-    const claims = {};
-    additionalClaims.forEach(claim => {
-      claims[claim.key] = claim.value;
-    });
-
-    if (credentialType) {
-      claims.credentialType = credentialType;
+  const issueCredential = async () => {
+    if (!walletInfo?.did) {
+      Alert.alert('Error', 'No DID found. Create your identity first.');
+      return;
     }
 
-    // Issue credential via backend (backend only signs it, doesn't store)
-    const result = await vcAPI.issue(
-      walletInfo.did, // issuer (you)
-      walletInfo.did, // subject (you)
-      claims
-    );
+    if (additionalClaims.length === 0) {
+      Alert.alert('Error', 'Add at least one claim to the credential.');
+      return;
+    }
 
-    // Backend returns signed credential with JWT
-    // Now store ONLY on mobile device
-    const credentialToStore = {
-      id: result.id || Date.now().toString(),
-      issuer: result.issuer,
-      subject: result.subject,
-      data: result.data,
-      jwt: result.jwt,
-      addedAt: result.createdAt || new Date().toISOString(),
-    };
+    setIsIssuing(true);
 
-    // Add to mobile wallet (encrypted storage)
-    await secureStorage.addCredential(credentialToStore);
+    try {
+      const claims = {};
+      additionalClaims.forEach(claim => {
+        claims[claim.key] = claim.value;
+      });
 
-    logger.success('Credential stored in mobile wallet');
+      if (credentialType) {
+        claims.credentialType = credentialType;
+      }
 
-    Alert.alert(
-      'Success',
-      'Credential added to your wallet!\n\nGo to Wallet tab to see it.',
-      [{ text: 'OK', onPress: () => resetForm() }]
-    );
+      const credential = await vcService.issueCredentialLocally(claims);
+      
+      logger.success('Credential issued and stored locally');
 
-  } catch (error) {
-    logger.error(`Failed to issue credential: ${error.message}`);
-    Alert.alert('Error', `${error.message}`);
-  } finally {
-    setIsIssuing(false);
-  }
-};
+      Alert.alert(
+        'Success',
+        'Credential added to your wallet!\n\nGo to Wallet tab to see it.',
+        [{ text: 'OK', onPress: () => resetForm() }]
+      );
+
+    } catch (error) {
+      logger.error(`Failed to issue credential: ${error.message}`);
+      Alert.alert('Error', `${error.message}`);
+    } finally {
+      setIsIssuing(false);
+    }
+  };
 
   const resetForm = () => {
     setCredentialType('');
@@ -202,13 +131,11 @@ const issueCredential = async () => {
       <StatusBar barStyle="light-content" />
 
       <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
-        {/* Header */}
         <View style={styles.header}>
           <Text style={styles.headerTitle}>Issue Credential</Text>
           <Text style={styles.headerSubtitle}>Create a test credential for your wallet</Text>
         </View>
 
-        {/* Templates */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Quick Templates</Text>
           <View style={styles.templatesGrid}>
@@ -236,7 +163,6 @@ const issueCredential = async () => {
           </View>
         </View>
 
-        {/* Credential Type */}
         <View style={styles.section}>
           <Text style={styles.label}>Credential Type (Optional)</Text>
           <TextInput
@@ -248,7 +174,6 @@ const issueCredential = async () => {
           />
         </View>
 
-        {/* Add Claims */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Claims</Text>
           <View style={styles.addClaimRow}>
@@ -272,7 +197,6 @@ const issueCredential = async () => {
           </TouchableOpacity>
         </View>
 
-        {/* Claims List */}
         {additionalClaims.length > 0 && (
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Current Claims</Text>
@@ -290,7 +214,6 @@ const issueCredential = async () => {
           </View>
         )}
 
-        {/* Issue Button */}
         <TouchableOpacity
           style={[styles.issueButton, { opacity: isIssuing ? 0.5 : 1 }]}
           onPress={issueCredential}

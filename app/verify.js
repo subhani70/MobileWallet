@@ -1,6 +1,3 @@
-// app/verify.js
-// Verify Credentials and Create Presentations
-
 import { useState, useCallback } from 'react';
 import {
   View,
@@ -13,12 +10,13 @@ import {
   TextInput,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useFocusEffect } from 'expo-router';
+import { useFocusEffect } from '@react-navigation/native';
 import * as Clipboard from 'expo-clipboard';
 import * as secureStorage from '../services/secureStorage';
 import * as didManager from '../services/didManager';
-import { vcAPI, vpAPI } from '../services/api';
+import { vpAPI } from '../services/api';
 import logger from '../utils/logger';
+import * as vcService from '../services/vcService';
 
 export default function VerifyScreen() {
   const [mode, setMode] = useState('create');
@@ -41,7 +39,6 @@ export default function VerifyScreen() {
     const hasWallet = await didManager.hasWallet();
     
     if (!hasWallet) {
-      // Wallet cleared - reset everything
       setCredentials([]);
       setSelectedCredentials([]);
       setWalletInfo(null);
@@ -84,11 +81,9 @@ export default function VerifyScreen() {
         selectedCredentials.includes(c.id)
       );
 
-      // Use challenge from input (empty string if not provided)
       const challengeToUse = challenge.trim() || undefined;
 
-      const result = await vpAPI.create(
-        walletInfo.did,
+      const result = await vcService.createPresentationLocally(
         selectedCreds,
         challengeToUse
       );
@@ -113,7 +108,7 @@ export default function VerifyScreen() {
         ]
       );
 
-      logger.success('Presentation created and copied');
+      logger.success('Presentation created locally and copied');
       
       setSelectedCredentials([]);
       setChallenge('');
