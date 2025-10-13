@@ -37,6 +37,15 @@ export default function RootLayout() {
         }}
       />
       <Tabs.Screen
+        name="scan"
+        options={{
+          title: 'Scan',
+          tabBarIcon: ({ color }) => (
+            <Text style={{ fontSize: 24, color }}>📷</Text>
+          ),
+        }}
+      />
+      <Tabs.Screen
         name="issue"
         options={{
           title: 'Issue',
@@ -55,6 +64,5 @@ export default function RootLayout() {
         }}
       />
     </Tabs>
-
   );
 }
