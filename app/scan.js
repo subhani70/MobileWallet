@@ -30,94 +30,213 @@ export default function ScanScreen() {
     setWalletInfo(info);
   };
 
-  const handleBarCodeScanned = async ({ data }) => {
-    if (scanned || processing) return;
+  // const handleBarCodeScanned = async ({ data }) => {
+  //   if (scanned || processing) return;
 
-    setScanned(true);
-    setProcessing(true);
+  //   setScanned(true);
+  //   setProcessing(true);
 
-    try {
-      logger.info('📷 QR Code scanned');
+  //   try {
+  //     logger.info('📷 QR Code scanned');
 
-      // Parse QR data
-      const credentialOffer = JSON.parse(data);
+  //     // Parse QR data
+  //     const credentialOffer = JSON.parse(data);
 
-      logger.info('📋 Credential offer received');
-      logger.info(`   Type: ${credentialOffer.credentialType}`);
+  //     logger.info('📋 Credential offer received');
+  //     logger.info(`   Type: ${credentialOffer.credentialType}`);
 
-      if (credentialOffer.type !== 'CREDENTIAL_OFFER') {
-        throw new Error('Invalid QR code. Not a credential offer.');
-      }
+  //     if (credentialOffer.type !== 'CREDENTIAL_OFFER') {
+  //       throw new Error('Invalid QR code. Not a credential offer.');
+  //     }
 
-      if (!walletInfo?.did) {
-        throw new Error('No DID found. Create your identity first.');
-      }
+  //     if (!walletInfo?.did) {
+  //       throw new Error('No DID found. Create your identity first.');
+  //     }
 
-      // Request credential from issuer
-      logger.info('📤 Requesting credential from issuer...');
+  //     // Request credential from issuer
+  //     logger.info('📤 Requesting credential from issuer...');
 
-      const response = await apiClient.post('/issue-to-holder', {
-        holderDID: walletInfo.did,
-        credentialData: credentialOffer.credentialData
-      });
+  //     const response = await apiClient.post('/issue-to-holder', {
+  //       holderDID: walletInfo.did,
+  //       credentialData: credentialOffer.credentialData
+  //     });
 
-      if (!response.data.success) {
-        throw new Error('Failed to receive credential from issuer');
-      }
+  //     if (!response.data.success) {
+  //       throw new Error('Failed to receive credential from issuer');
+  //     }
 
-      // Store credential locally
-      const credential = {
-        id: response.data.credential.id,
-        issuer: response.data.credential.issuer,
-        subject: response.data.credential.subject,
-        data: response.data.credential.data,
-        jwt: response.data.credential.jwt,
-        addedAt: new Date().toISOString()
-      };
+  //     // Store credential locally
+  //     const credential = {
+  //       id: response.data.credential.id,
+  //       issuer: response.data.credential.issuer,
+  //       subject: response.data.credential.subject,
+  //       data: response.data.credential.data,
+  //       jwt: response.data.credential.jwt,
+  //       addedAt: new Date().toISOString()
+  //     };
 
-      await secureStorage.addCredential(credential);
+  //     await secureStorage.addCredential(credential);
 
-      logger.success('✅ Credential received and stored');
+  //     logger.success('✅ Credential received and stored');
 
-      Alert.alert(
-        '✅ Credential Received!',
-        `${credentialOffer.credentialType} has been added to your wallet.\n\nGo to the Wallet tab to view it.`,
-        [
-          { 
-            text: 'View Wallet', 
-            onPress: () => {
-              setScanned(false);
-              setProcessing(false);
-            }
-          },
-          {
-            text: 'Scan Another',
-            onPress: () => {
-              setScanned(false);
-              setProcessing(false);
-            }
-          }
-        ]
-      );
+  //     Alert.alert(
+  //       '✅ Credential Received!',
+  //       `${credentialOffer.credentialType} has been added to your wallet.\n\nGo to the Wallet tab to view it.`,
+  //       [
+  //         { 
+  //           text: 'View Wallet', 
+  //           onPress: () => {
+  //             setScanned(false);
+  //             setProcessing(false);
+  //           }
+  //         },
+  //         {
+  //           text: 'Scan Another',
+  //           onPress: () => {
+  //             setScanned(false);
+  //             setProcessing(false);
+  //           }
+  //         }
+  //       ]
+  //     );
 
-    } catch (error) {
-      logger.error('Failed to process credential: ' + error.message);
+  //   } catch (error) {
+  //     logger.error('Failed to process credential: ' + error.message);
       
-      Alert.alert(
-        '❌ Error',
-        error.message,
-        [
-          {
-            text: 'Try Again',
-            onPress: () => {
-              setScanned(false);
-              setProcessing(false);
-            }
-          }
-        ]
-      );
+  //     Alert.alert(
+  //       '❌ Error',
+  //       error.message,
+  //       [
+  //         {
+  //           text: 'Try Again',
+  //           onPress: () => {
+  //             setScanned(false);
+  //             setProcessing(false);
+  //           }
+  //         }
+  //       ]
+  //     );
+  //   }
+  // };
+const handleBarCodeScanned = async ({ data }) => {
+  if (scanned || processing) return;
+
+  setScanned(true);
+  setProcessing(true);
+
+  try {
+    logger.info('📷 QR Code scanned');
+
+    // Parse claim token
+    const claimToken = JSON.parse(data);
+
+    logger.info('📋 Claim token received');
+    logger.info(`   Type: ${claimToken.type}`);
+    logger.info(`   Token ID: ${claimToken.id}`);
+
+    // Validate claim token type
+    if (claimToken.type !== 'CREDENTIAL_CLAIM') {
+      throw new Error('Invalid QR code. This is not a credential claim token.');
     }
-  };
+
+    // Check wallet
+    if (!walletInfo?.did) {
+      throw new Error('No DID found. Create your identity first.');
+    }
+
+    // Check expiration (client-side for UX)
+    if (Date.now() > claimToken.expiresAt) {
+      throw new Error('This claim token has expired. Please request a new one from the issuer.');
+    }
+
+    // Verify DID if pre-registered (optional client-side check)
+    if (claimToken.requiredDID && claimToken.requiredDID !== walletInfo.did) {
+      throw new Error(`This credential is issued for a different student.\n\nExpected: ${claimToken.requiredDID}\n\nYour DID: ${walletInfo.did}`);
+    }
+
+    // Claim credential from backend
+    logger.info('📤 Claiming credential from issuer...');
+    logger.info(`   Your DID: ${walletInfo.did}`);
+
+    const response = await apiClient.post('/claim-credential', {
+      claimToken: claimToken,
+      holderDID: walletInfo.did
+    });
+
+    if (!response.data.success) {
+      throw new Error(response.data.error || 'Failed to claim credential');
+    }
+
+    // Store credential locally
+    const credential = {
+      id: response.data.credential.id,
+      issuer: response.data.credential.issuer,
+      subject: response.data.credential.subject,
+      data: response.data.credential.data,
+      jwt: response.data.credential.jwt,
+      addedAt: new Date().toISOString(),
+      claimTokenId: claimToken.id
+    };
+
+    await secureStorage.addCredential(credential);
+
+    logger.success('✅ Credential claimed and stored securely');
+
+    Alert.alert(
+      '✅ Credential Claimed!',
+      `${claimToken.credentialData.credentialType} has been added to your wallet.\n\n🔐 Securely verified and issued.\n\nGo to the Wallet tab to view it.`,
+      [
+        { 
+          text: 'View Wallet', 
+          onPress: () => {
+            setScanned(false);
+            setProcessing(false);
+          }
+        },
+        {
+          text: 'Scan Another',
+          onPress: () => {
+            setScanned(false);
+            setProcessing(false);
+          }
+        }
+      ]
+    );
+
+  } catch (error) {
+    logger.error('Failed to claim credential: ' + error.message);
+    
+    let errorTitle = '❌ Claim Failed';
+    let errorMessage = error.message;
+
+    // User-friendly error messages
+    if (error.message.includes('expired')) {
+      errorTitle = '⏰ Token Expired';
+      errorMessage = 'This claim link has expired. Please request a new one from your institution.';
+    } else if (error.message.includes('already used')) {
+      errorTitle = '🔒 Already Claimed';
+      errorMessage = 'This credential has already been claimed and cannot be used again.';
+    } else if (error.message.includes('different student')) {
+      errorTitle = '🚫 Not For You';
+      errorMessage = error.message;
+    }
+    
+    Alert.alert(
+      errorTitle,
+      errorMessage,
+      [
+        {
+          text: 'Try Again',
+          onPress: () => {
+            setScanned(false);
+            setProcessing(false);
+          }
+        }
+      ]
+    );
+  }
+};
+
 
   if (!permission) {
     return (
