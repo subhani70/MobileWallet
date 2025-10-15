@@ -1,4 +1,7 @@
-import { useState, useEffect } from 'react';
+// wallet/app/scan.js
+// FIXED: Check DID exists before allowing credential claim
+
+import { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -10,6 +13,7 @@ import {
 } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { LinearGradient } from 'expo-linear-gradient';
+import { useFocusEffect } from '@react-navigation/native';
 import * as didManager from '../services/didManager';
 import * as secureStorage from '../services/secureStorage';
 import apiClient from '../services/api';
@@ -21,222 +25,155 @@ export default function ScanScreen() {
   const [processing, setProcessing] = useState(false);
   const [walletInfo, setWalletInfo] = useState(null);
 
-  useEffect(() => {
-    loadWallet();
-  }, []);
+  // ✅ FIX: Reload wallet info every time screen comes into focus
+  useFocusEffect(
+    useCallback(() => {
+      loadWallet();
+    }, [])
+  );
 
   const loadWallet = async () => {
     const info = await didManager.getWalletInfo();
     setWalletInfo(info);
   };
 
-  // const handleBarCodeScanned = async ({ data }) => {
-  //   if (scanned || processing) return;
+  const handleBarCodeScanned = async ({ data }) => {
+    if (scanned || processing) return;
 
-  //   setScanned(true);
-  //   setProcessing(true);
+    setScanned(true);
+    setProcessing(true);
 
-  //   try {
-  //     logger.info('📷 QR Code scanned');
+    try {
+      logger.info('📷 QR Code scanned');
 
-  //     // Parse QR data
-  //     const credentialOffer = JSON.parse(data);
+      // ✅ FIX: Check if wallet exists FIRST
+      if (!walletInfo?.did) {
+        throw new Error('No DID found. Please create your identity first.\n\nGo to Home screen → Click "Create Your Identity"');
+      }
 
-  //     logger.info('📋 Credential offer received');
-  //     logger.info(`   Type: ${credentialOffer.credentialType}`);
-
-  //     if (credentialOffer.type !== 'CREDENTIAL_OFFER') {
-  //       throw new Error('Invalid QR code. Not a credential offer.');
-  //     }
-
-  //     if (!walletInfo?.did) {
-  //       throw new Error('No DID found. Create your identity first.');
-  //     }
-
-  //     // Request credential from issuer
-  //     logger.info('📤 Requesting credential from issuer...');
-
-  //     const response = await apiClient.post('/issue-to-holder', {
-  //       holderDID: walletInfo.did,
-  //       credentialData: credentialOffer.credentialData
-  //     });
-
-  //     if (!response.data.success) {
-  //       throw new Error('Failed to receive credential from issuer');
-  //     }
-
-  //     // Store credential locally
-  //     const credential = {
-  //       id: response.data.credential.id,
-  //       issuer: response.data.credential.issuer,
-  //       subject: response.data.credential.subject,
-  //       data: response.data.credential.data,
-  //       jwt: response.data.credential.jwt,
-  //       addedAt: new Date().toISOString()
-  //     };
-
-  //     await secureStorage.addCredential(credential);
-
-  //     logger.success('✅ Credential received and stored');
-
-  //     Alert.alert(
-  //       '✅ Credential Received!',
-  //       `${credentialOffer.credentialType} has been added to your wallet.\n\nGo to the Wallet tab to view it.`,
-  //       [
-  //         { 
-  //           text: 'View Wallet', 
-  //           onPress: () => {
-  //             setScanned(false);
-  //             setProcessing(false);
-  //           }
-  //         },
-  //         {
-  //           text: 'Scan Another',
-  //           onPress: () => {
-  //             setScanned(false);
-  //             setProcessing(false);
-  //           }
-  //         }
-  //       ]
-  //     );
-
-  //   } catch (error) {
-  //     logger.error('Failed to process credential: ' + error.message);
+      // ✅ FIX: Check if DID is registered on blockchain
+      const holderAddress = walletInfo.did.split(':').pop();
       
-  //     Alert.alert(
-  //       '❌ Error',
-  //       error.message,
-  //       [
-  //         {
-  //           text: 'Try Again',
-  //           onPress: () => {
-  //             setScanned(false);
-  //             setProcessing(false);
-  //           }
-  //         }
-  //       ]
-  //     );
-  //   }
-  // };
-const handleBarCodeScanned = async ({ data }) => {
-  if (scanned || processing) return;
+      logger.info('🔍 Checking DID registration on blockchain...');
+      
+      const registrationCheck = await apiClient.get(`/check-registration/${holderAddress}`);
+      
+      if (!registrationCheck.data.registered) {
+        throw new Error('Your DID is not registered on blockchain yet.\n\nPlease wait a moment for blockchain confirmation, or try creating your identity again.');
+      }
 
-  setScanned(true);
-  setProcessing(true);
+      logger.info('✅ DID is registered on blockchain');
 
-  try {
-    logger.info('📷 QR Code scanned');
+      // Parse claim token
+      const claimToken = JSON.parse(data);
 
-    // Parse claim token
-    const claimToken = JSON.parse(data);
+      logger.info('📋 Claim token received');
+      logger.info(`   Type: ${claimToken.type}`);
+      logger.info(`   Token ID: ${claimToken.id}`);
 
-    logger.info('📋 Claim token received');
-    logger.info(`   Type: ${claimToken.type}`);
-    logger.info(`   Token ID: ${claimToken.id}`);
+      // Validate claim token type
+      if (claimToken.type !== 'CREDENTIAL_CLAIM') {
+        throw new Error('Invalid QR code. This is not a credential claim token.');
+      }
 
-    // Validate claim token type
-    if (claimToken.type !== 'CREDENTIAL_CLAIM') {
-      throw new Error('Invalid QR code. This is not a credential claim token.');
-    }
+      // Check expiration (client-side for UX)
+      if (Date.now() > claimToken.expiresAt) {
+        throw new Error('This claim token has expired. Please request a new one from the issuer.');
+      }
 
-    // Check wallet
-    if (!walletInfo?.did) {
-      throw new Error('No DID found. Create your identity first.');
-    }
+      // Verify DID if pre-registered (optional client-side check)
+      if (claimToken.requiredDID && claimToken.requiredDID !== walletInfo.did) {
+        throw new Error(`This credential is issued for a different student.\n\nExpected: ${claimToken.requiredDID}\n\nYour DID: ${walletInfo.did}`);
+      }
 
-    // Check expiration (client-side for UX)
-    if (Date.now() > claimToken.expiresAt) {
-      throw new Error('This claim token has expired. Please request a new one from the issuer.');
-    }
+      // Claim credential from backend
+      logger.info('📤 Claiming credential from issuer...');
+      logger.info(`   Your DID: ${walletInfo.did}`);
 
-    // Verify DID if pre-registered (optional client-side check)
-    if (claimToken.requiredDID && claimToken.requiredDID !== walletInfo.did) {
-      throw new Error(`This credential is issued for a different student.\n\nExpected: ${claimToken.requiredDID}\n\nYour DID: ${walletInfo.did}`);
-    }
+      const response = await apiClient.post('/claim-credential', {
+        claimToken: claimToken,
+        holderDID: walletInfo.did
+      });
 
-    // Claim credential from backend
-    logger.info('📤 Claiming credential from issuer...');
-    logger.info(`   Your DID: ${walletInfo.did}`);
+      if (!response.data.success) {
+        throw new Error(response.data.error || 'Failed to claim credential');
+      }
 
-    const response = await apiClient.post('/claim-credential', {
-      claimToken: claimToken,
-      holderDID: walletInfo.did
-    });
+      // Store credential locally
+      const credential = {
+        id: response.data.credential.id,
+        issuer: response.data.credential.issuer,
+        subject: response.data.credential.subject,
+        data: response.data.credential.data,
+        jwt: response.data.credential.jwt,
+        addedAt: new Date().toISOString(),
+        claimTokenId: claimToken.id
+      };
 
-    if (!response.data.success) {
-      throw new Error(response.data.error || 'Failed to claim credential');
-    }
+      await secureStorage.addCredential(credential);
 
-    // Store credential locally
-    const credential = {
-      id: response.data.credential.id,
-      issuer: response.data.credential.issuer,
-      subject: response.data.credential.subject,
-      data: response.data.credential.data,
-      jwt: response.data.credential.jwt,
-      addedAt: new Date().toISOString(),
-      claimTokenId: claimToken.id
-    };
+      logger.success('✅ Credential claimed and stored securely');
 
-    await secureStorage.addCredential(credential);
-
-    logger.success('✅ Credential claimed and stored securely');
-
-    Alert.alert(
-      '✅ Credential Claimed!',
-      `${claimToken.credentialData.credentialType} has been added to your wallet.\n\n🔐 Securely verified and issued.\n\nGo to the Wallet tab to view it.`,
-      [
-        { 
-          text: 'View Wallet', 
-          onPress: () => {
-            setScanned(false);
-            setProcessing(false);
+      Alert.alert(
+        '✅ Credential Claimed!',
+        `${claimToken.credentialData.credentialType} has been added to your wallet.\n\n🔐 Securely verified and issued.\n\nGo to the Wallet tab to view it.`,
+        [
+          { 
+            text: 'View Wallet', 
+            onPress: () => {
+              setScanned(false);
+              setProcessing(false);
+            }
+          },
+          {
+            text: 'Scan Another',
+            onPress: () => {
+              setScanned(false);
+              setProcessing(false);
+            }
           }
-        },
-        {
-          text: 'Scan Another',
-          onPress: () => {
-            setScanned(false);
-            setProcessing(false);
+        ]
+      );
+
+    } catch (error) {
+      logger.error('Failed to claim credential: ' + error.message);
+      
+      let errorTitle = '❌ Claim Failed';
+      let errorMessage = error.message;
+
+      // User-friendly error messages
+      if (error.message.includes('No DID found')) {
+        errorTitle = '🆔 Identity Required';
+        errorMessage = 'You need to create your identity first.\n\nGo to Home screen and click "Create Your Identity"';
+      } else if (error.message.includes('not registered on blockchain')) {
+        errorTitle = '⏳ Registration Pending';
+        errorMessage = 'Your DID is being registered on blockchain.\n\nPlease wait a moment and try again.\n\nIf this persists, try creating your identity again.';
+      } else if (error.message.includes('expired')) {
+        errorTitle = '⏰ Token Expired';
+        errorMessage = 'This claim link has expired. Please request a new one from your institution.';
+      } else if (error.message.includes('already used')) {
+        errorTitle = '🔒 Already Claimed';
+        errorMessage = 'This credential has already been claimed and cannot be used again.';
+      } else if (error.message.includes('different student')) {
+        errorTitle = '🚫 Not For You';
+        errorMessage = error.message;
+      }
+      
+      Alert.alert(
+        errorTitle,
+        errorMessage,
+        [
+          {
+            text: 'OK',
+            onPress: () => {
+              setScanned(false);
+              setProcessing(false);
+            }
           }
-        }
-      ]
-    );
-
-  } catch (error) {
-    logger.error('Failed to claim credential: ' + error.message);
-    
-    let errorTitle = '❌ Claim Failed';
-    let errorMessage = error.message;
-
-    // User-friendly error messages
-    if (error.message.includes('expired')) {
-      errorTitle = '⏰ Token Expired';
-      errorMessage = 'This claim link has expired. Please request a new one from your institution.';
-    } else if (error.message.includes('already used')) {
-      errorTitle = '🔒 Already Claimed';
-      errorMessage = 'This credential has already been claimed and cannot be used again.';
-    } else if (error.message.includes('different student')) {
-      errorTitle = '🚫 Not For You';
-      errorMessage = error.message;
+        ]
+      );
     }
-    
-    Alert.alert(
-      errorTitle,
-      errorMessage,
-      [
-        {
-          text: 'Try Again',
-          onPress: () => {
-            setScanned(false);
-            setProcessing(false);
-          }
-        }
-      ]
-    );
-  }
-};
-
+  };
 
   if (!permission) {
     return (
@@ -279,6 +216,29 @@ const handleBarCodeScanned = async ({ data }) => {
         <Text style={styles.headerSubtitle}>
           Point camera at credential QR code
         </Text>
+        
+        {/* ✅ DID Status Indicator */}
+        {walletInfo?.did ? (
+          <View style={styles.didStatusCard}>
+            <Text style={styles.didStatusIcon}>✅</Text>
+            <View style={styles.didStatusText}>
+              <Text style={styles.didStatusTitle}>Identity Ready</Text>
+              <Text style={styles.didStatusSubtitle}>
+                {walletInfo.did.slice(0, 30)}...
+              </Text>
+            </View>
+          </View>
+        ) : (
+          <View style={[styles.didStatusCard, styles.didStatusCardWarning]}>
+            <Text style={styles.didStatusIcon}>⚠️</Text>
+            <View style={styles.didStatusText}>
+              <Text style={styles.didStatusTitle}>No Identity Found</Text>
+              <Text style={styles.didStatusSubtitle}>
+                Create your identity first on Home screen
+              </Text>
+            </View>
+          </View>
+        )}
       </View>
 
       <View style={styles.cameraContainer}>
@@ -311,9 +271,10 @@ const handleBarCodeScanned = async ({ data }) => {
       <View style={styles.instructions}>
         <Text style={styles.instructionTitle}>📱 How to receive credentials</Text>
         <Text style={styles.instructionText}>
-          1. Ask the issuer to generate a QR code{'\n'}
-          2. Point your camera at the QR code{'\n'}
-          3. Credential will be automatically added to your wallet
+          1. Make sure you have created your identity{'\n'}
+          2. Ask the issuer to generate a QR code{'\n'}
+          3. Point your camera at the QR code{'\n'}
+          4. Credential will be automatically added to your wallet
         </Text>
       </View>
 
@@ -355,6 +316,37 @@ const styles = StyleSheet.create({
   headerSubtitle: {
     fontSize: 16,
     color: '#888',
+    marginBottom: 16,
+  },
+  didStatusCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#1a3a1a',
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#2a5a2a',
+  },
+  didStatusCardWarning: {
+    backgroundColor: '#3a2a1a',
+    borderColor: '#5a4a2a',
+  },
+  didStatusIcon: {
+    fontSize: 24,
+    marginRight: 12,
+  },
+  didStatusText: {
+    flex: 1,
+  },
+  didStatusTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#fff',
+    marginBottom: 4,
+  },
+  didStatusSubtitle: {
+    fontSize: 12,
+    color: '#aaa',
   },
   cameraContainer: {
     flex: 1,

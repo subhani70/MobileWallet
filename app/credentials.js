@@ -1,7 +1,7 @@
 // app/credentials.js
-// Modern Wallet-Style Credentials Screen
+// FIXED: Reload credentials when screen comes into focus
 
-import { useState, useEffect } from 'react';
+import { useState, useCallback } from 'react';
 import {
     View,
     Text,
@@ -13,15 +13,11 @@ import {
     StatusBar
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
+import { useFocusEffect } from '@react-navigation/native';
 import * as secureStorage from '../services/secureStorage';
 import { vcAPI } from '../services/api';
 import logger from '../utils/logger';
-import { useFocusEffect } from '@react-navigation/native';
-import { useCallback } from 'react';
-
-// import { useFocusEffect } from 'expo-router';
-
-
+import * as didManager from '../services/didManager';
 
 const { width } = Dimensions.get('window');
 const CARD_WIDTH = width - 40;
@@ -30,12 +26,30 @@ export default function CredentialsScreen() {
     const [credentials, setCredentials] = useState([]);
     const [isLoading, setIsLoading] = useState(true);
     const [selectedCard, setSelectedCard] = useState(null);
+    const [walletInfo, setWalletInfo] = useState(null);
 
+    // ✅ FIX: Reload both credentials AND wallet info when screen comes into focus
     useFocusEffect(
         useCallback(() => {
+            loadWallet();
             loadCredentials();
         }, [])
     );
+
+    const loadWallet = async () => {
+        try {
+            const hasWallet = await didManager.hasWallet();
+            if (hasWallet) {
+                const info = await didManager.getWalletInfo();
+                setWalletInfo(info);
+            } else {
+                setWalletInfo(null);
+            }
+        } catch (error) {
+            logger.error('Failed to load wallet info');
+            setWalletInfo(null);
+        }
+    };
 
     const loadCredentials = async () => {
         try {
@@ -49,10 +63,6 @@ export default function CredentialsScreen() {
             setIsLoading(false);
         }
     };
-
-    useEffect(() => {
-        loadCredentials();
-    }, []);
 
     const handleDelete = (credentialId) => {
         Alert.alert(
@@ -185,6 +195,31 @@ export default function CredentialsScreen() {
                 </View>
             </View>
 
+            {/* ✅ DID Status Indicator */}
+            {walletInfo?.did && (
+                <View style={styles.didStatusCard}>
+                    <Text style={styles.didStatusIcon}>✅</Text>
+                    <View style={styles.didStatusContent}>
+                        <Text style={styles.didStatusTitle}>Identity Active</Text>
+                        <Text style={styles.didStatusDID} numberOfLines={1}>
+                            {walletInfo.did}
+                        </Text>
+                    </View>
+                </View>
+            )}
+
+            {!walletInfo?.did && (
+                <View style={[styles.didStatusCard, styles.didStatusCardWarning]}>
+                    <Text style={styles.didStatusIcon}>⚠️</Text>
+                    <View style={styles.didStatusContent}>
+                        <Text style={styles.didStatusTitle}>No Identity</Text>
+                        <Text style={styles.didStatusSubtitle}>
+                            Create your identity on Home screen to receive credentials
+                        </Text>
+                    </View>
+                </View>
+            )}
+
             {/* Cards ScrollView */}
             <ScrollView
                 style={styles.scrollView}
@@ -201,7 +236,10 @@ export default function CredentialsScreen() {
                         <Text style={styles.emptyTitle}>Wallet is Empty</Text>
                         <Text style={styles.emptySubtitle}>
                             You don't have any credentials yet{'\n'}
-                            Issue your first credential to get started
+                            {walletInfo?.did
+                                ? 'Scan a QR code to receive your first credential'
+                                : 'Create your identity first on Home screen'
+                            }
                         </Text>
                     </View>
                 ) : (
@@ -217,7 +255,10 @@ export default function CredentialsScreen() {
             {credentials.length > 0 && (
                 <TouchableOpacity
                     style={styles.fab}
-                    onPress={loadCredentials}
+                    onPress={() => {
+                        loadWallet();
+                        loadCredentials();
+                    }}
                 >
                     <Text style={styles.fabText}>⟳</Text>
                 </TouchableOpacity>
@@ -259,6 +300,43 @@ const styles = StyleSheet.create({
         color: '#fff',
         fontSize: 16,
         fontWeight: 'bold',
+    },
+    didStatusCard: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#1a3a1a',
+        marginHorizontal: 20,
+        marginBottom: 16,
+        padding: 12,
+        borderRadius: 12,
+        borderWidth: 1,
+        borderColor: '#2a5a2a',
+    },
+    didStatusCardWarning: {
+        backgroundColor: '#3a2a1a',
+        borderColor: '#5a4a2a',
+    },
+    didStatusIcon: {
+        fontSize: 24,
+        marginRight: 12,
+    },
+    didStatusContent: {
+        flex: 1,
+    },
+    didStatusTitle: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: '#fff',
+        marginBottom: 4,
+    },
+    didStatusDID: {
+        fontSize: 11,
+        color: '#aaa',
+        fontFamily: 'monospace',
+    },
+    didStatusSubtitle: {
+        fontSize: 12,
+        color: '#aaa',
     },
     scrollView: {
         flex: 1,
