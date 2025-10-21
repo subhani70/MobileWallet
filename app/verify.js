@@ -1,3 +1,6 @@
+// wallet/app/verify.js
+// ENHANCED: Auto-submit to verifier (no manual copy-paste!)
+
 import { useState, useCallback } from 'react';
 import {
   View,
@@ -8,9 +11,11 @@ import {
   Alert,
   StatusBar,
   TextInput,
+  Modal,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect } from '@react-navigation/native';
+import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as Clipboard from 'expo-clipboard';
 import * as secureStorage from '../services/secureStorage';
 import * as didManager from '../services/didManager';
@@ -18,16 +23,26 @@ import { vpAPI } from '../services/api';
 import logger from '../utils/logger';
 import * as vcService from '../services/vcService';
 
-export default function VerifyScreen() {
+// 🔧 IMPORTANT: Change this to your computer's IP address!
+const API_BASE_URL = 'http://172.16.10.117:5000'; // ← UPDATE THIS!
+
+export default function EnhancedVerifyScreen() {
   const [mode, setMode] = useState('create');
   const [credentials, setCredentials] = useState([]);
   const [selectedCredentials, setSelectedCredentials] = useState([]);
   const [walletInfo, setWalletInfo] = useState(null);
   const [challenge, setChallenge] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
-  
+
+  // Verification mode states
   const [vpJwt, setVpJwt] = useState('');
   const [verificationResult, setVerificationResult] = useState(null);
+
+  // Scanner mode states
+  const [permission, requestPermission] = useCameraPermissions();
+  const [scanned, setScanned] = useState(false);
+  const [verificationRequest, setVerificationRequest] = useState(null);
+  const [showScanner, setShowScanner] = useState(false);
 
   useFocusEffect(
     useCallback(() => {
@@ -37,24 +52,93 @@ export default function VerifyScreen() {
 
   const loadData = async () => {
     const hasWallet = await didManager.hasWallet();
-    
+
     if (!hasWallet) {
       setCredentials([]);
       setSelectedCredentials([]);
       setWalletInfo(null);
-      setVpJwt('');
-      setChallenge('');
-      setVerificationResult(null);
       return;
     }
 
     const stored = await secureStorage.getCredentials();
     setCredentials(stored);
-    
+
     const info = await didManager.getWalletInfo();
     setWalletInfo(info);
   };
 
+  // ============================================
+  // QR SCANNER FOR VERIFICATION REQUESTS
+  // ============================================
+  const handleScanRequest = async ({ data }) => {
+    if (scanned || isProcessing) return;
+
+    setScanned(true);
+    setIsProcessing(true);
+
+    try {
+      const request = JSON.parse(data);
+
+      logger.info('📷 Verification request scanned');
+
+      if (request.type !== 'PRESENTATION_REQUEST') {
+        throw new Error('Invalid QR code. Not a verification request.');
+      }
+
+      logger.info('📋 Verification Request Details:');
+      logger.info(`   Verifier: ${request.verifierName || 'Unknown'}`);
+      logger.info(`   Challenge: ${request.challenge}`);
+
+      setVerificationRequest(request);
+      setChallenge(request.challenge);
+      setShowScanner(false);
+      setMode('create');
+      setIsProcessing(false);
+
+      Alert.alert(
+        '📋 Verification Request',
+        `${request.verifierName || 'A verifier'} is requesting credentials.\n\nPurpose: ${request.purpose || 'Verification'}\n\nSelect credentials to share and tap "Create Presentation".`,
+        [{ text: 'OK' }]
+      );
+
+    } catch (error) {
+      logger.error('Failed to parse verification request: ' + error.message);
+      Alert.alert(
+        '❌ Invalid QR Code',
+        error.message,
+        [
+          {
+            text: 'OK',
+            onPress: () => {
+              setScanned(false);
+              setIsProcessing(false);
+            }
+          }
+        ]
+      );
+    }
+  };
+
+  const openScanner = () => {
+    if (!permission?.granted) {
+      Alert.alert(
+        'Camera Permission',
+        'Camera access is required to scan verification requests',
+        [
+          { text: 'Cancel' },
+          { text: 'Grant', onPress: requestPermission }
+        ]
+      );
+      return;
+    }
+    setShowScanner(true);
+    setScanned(false);
+    setIsProcessing(false);
+  };
+
+  // ============================================
+  // CREDENTIAL SELECTION
+  // ============================================
   const toggleCredentialSelection = (credentialId) => {
     if (selectedCredentials.includes(credentialId)) {
       setSelectedCredentials(selectedCredentials.filter(id => id !== credentialId));
@@ -63,6 +147,9 @@ export default function VerifyScreen() {
     }
   };
 
+  // ============================================
+  // CREATE PRESENTATION - WITH AUTO-SUBMIT!
+  // ============================================
   const createPresentation = async () => {
     if (selectedCredentials.length === 0) {
       Alert.alert('Error', 'Select at least one credential');
@@ -77,40 +164,87 @@ export default function VerifyScreen() {
     setIsProcessing(true);
 
     try {
-      const selectedCreds = credentials.filter(c => 
+      const selectedCreds = credentials.filter(c =>
         selectedCredentials.includes(c.id)
       );
 
       const challengeToUse = challenge.trim() || undefined;
 
+      logger.info('📋 Creating presentation...');
+      logger.info(`   Credentials: ${selectedCreds.length}`);
+      if (challengeToUse) {
+        logger.info(`   Challenge: ${challengeToUse}`);
+      }
+
+      // Create VP locally
       const result = await vcService.createPresentationLocally(
         selectedCreds,
         challengeToUse
       );
 
+      // Always copy to clipboard as backup
       await Clipboard.setStringAsync(result.vpJwt);
 
-      Alert.alert(
-        'Presentation Created',
-        `VP JWT created and copied to clipboard!\n\nCredentials: ${selectedCreds.length}${challengeToUse ? `\nChallenge: ${challengeToUse}` : '\nNo challenge used'}`,
-        [
-          { 
-            text: 'Verify Now', 
-            onPress: () => {
-              setMode('verify');
-              setVpJwt(result.vpJwt);
-              if (challengeToUse) {
-                setChallenge(challengeToUse);
-              }
-            }
-          },
-          { text: 'OK' }
-        ]
-      );
+      // 🚀 AUTO-SUBMIT: If this is a response to a verification request
+      if (verificationRequest && verificationRequest.id) {
+        logger.info('📤 Auto-submitting to verifier...');
 
-      logger.success('Presentation created locally and copied');
-      
+        try {
+          const submitResponse = await fetch(`${API_BASE_URL}/verifier/submit-response`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              sessionId: verificationRequest.id,
+              vpJwt: result.vpJwt
+            })
+          });
+
+          const submitResult = await submitResponse.json();
+
+          if (submitResult.success && submitResult.verified) {
+            logger.success('✅ Presentation verified by verifier!');
+
+            Alert.alert(
+              '✅ Success!',
+              `Your credentials have been automatically submitted to ${verificationRequest.verifierName}!\n\nVerification Status: ✅ Verified\n\n(VP JWT also copied to clipboard as backup)`,
+              [{ text: 'OK' }]
+            );
+          } else {
+            throw new Error(submitResult.error || 'Verification failed');
+          }
+
+        } catch (submitError) {
+          logger.error('Auto-submit failed: ' + submitError.message);
+
+          Alert.alert(
+            '⚠️ Manual Share Required',
+            `Automatic submission failed.\n\nVP JWT has been copied to clipboard.\n\nPlease share it manually with ${verificationRequest.verifierName}.`,
+            [{ text: 'OK' }]
+          );
+        }
+      } else {
+        // Manual VP creation (no verification request)
+        Alert.alert(
+          '✅ Presentation Created!',
+          `Credentials: ${selectedCreds.length}${challengeToUse ? `\nChallenge: ${challengeToUse}` : ''}\n\nVP JWT copied to clipboard!\n\nShare it with the verifier or verify it yourself.`,
+          [
+            {
+              text: 'Verify Now',
+              onPress: () => {
+                setMode('verify');
+                setVpJwt(result.vpJwt);
+              }
+            },
+            { text: 'OK' }
+          ]
+        );
+      }
+
+      logger.success('✅ Presentation created');
+
+      // Clear selections
       setSelectedCredentials([]);
+      setVerificationRequest(null);
       setChallenge('');
 
     } catch (error) {
@@ -121,6 +255,9 @@ export default function VerifyScreen() {
     }
   };
 
+  // ============================================
+  // VERIFY PRESENTATION
+  // ============================================
   const verifyPresentation = async () => {
     if (!vpJwt.trim()) {
       Alert.alert('Error', 'Enter a VP JWT to verify');
@@ -132,16 +269,19 @@ export default function VerifyScreen() {
 
     try {
       const challengeToUse = challenge.trim() || undefined;
+
+      logger.info('🔍 Verifying presentation...');
+
       const result = await vpAPI.verify(vpJwt, challengeToUse);
-      
+
       setVerificationResult(result);
-      
+
       if (result.verified) {
-        Alert.alert('Verified', 'Presentation is valid and verified!');
-        logger.success('Presentation verified successfully');
+        Alert.alert('✅ Verified', 'Presentation is valid!');
+        logger.success('✅ Presentation verified');
       } else {
-        Alert.alert('Invalid', 'Presentation verification failed');
-        logger.error('Presentation verification failed');
+        Alert.alert('❌ Invalid', 'Verification failed');
+        logger.error('❌ Verification failed');
       }
 
     } catch (error) {
@@ -157,10 +297,29 @@ export default function VerifyScreen() {
     setVpJwt('');
     setChallenge('');
     setVerificationResult(null);
+    setVerificationRequest(null);
   };
 
+  // ============================================
+  // RENDER CREATE MODE
+  // ============================================
   const renderCreateMode = () => (
     <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
+      {/* Verification Request Info */}
+      {verificationRequest && (
+        <View style={styles.requestCard}>
+          <Text style={styles.requestTitle}>📋 Responding to Request</Text>
+          <View style={styles.requestRow}>
+            <Text style={styles.requestLabel}>Verifier:</Text>
+            <Text style={styles.requestValue}>{verificationRequest.verifierName}</Text>
+          </View>
+          <View style={styles.requestRow}>
+            <Text style={styles.requestLabel}>Purpose:</Text>
+            <Text style={styles.requestValue}>{verificationRequest.purpose || 'Verification'}</Text>
+          </View>
+        </View>
+      )}
+
       {!walletInfo ? (
         <View style={styles.emptyState}>
           <Text style={styles.emptyText}>No wallet found</Text>
@@ -171,13 +330,13 @@ export default function VerifyScreen() {
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Select Credentials</Text>
             <Text style={styles.sectionSubtitle}>
-              Choose credentials to include in the presentation
+              Choose credentials to share
             </Text>
 
             {credentials.length === 0 ? (
               <View style={styles.emptyState}>
-                <Text style={styles.emptyText}>No credentials in wallet</Text>
-                <Text style={styles.emptySubtext}>Issue credentials first</Text>
+                <Text style={styles.emptyText}>No credentials</Text>
+                <Text style={styles.emptySubtext}>Receive credentials first</Text>
               </View>
             ) : (
               credentials.map((credential) => {
@@ -211,19 +370,18 @@ export default function VerifyScreen() {
             )}
           </View>
 
-          <View style={styles.section}>
-            <Text style={styles.label}>Challenge/Nonce (Optional)</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="Leave empty for no challenge"
-              placeholderTextColor="#666"
-              value={challenge}
-              onChangeText={setChallenge}
-            />
-            <Text style={styles.hint}>
-              Only add if the verifier requires a specific challenge
-            </Text>
-          </View>
+          {!verificationRequest && (
+            <View style={styles.section}>
+              <Text style={styles.label}>Challenge (Optional)</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="Leave empty for no challenge"
+                placeholderTextColor="#666"
+                value={challenge}
+                onChangeText={setChallenge}
+              />
+            </View>
+          )}
 
           <View style={styles.section}>
             <Text style={styles.selectedCount}>
@@ -243,9 +401,17 @@ export default function VerifyScreen() {
               style={styles.actionButtonGradient}
             >
               <Text style={styles.actionButtonText}>
-                {isProcessing ? 'Creating...' : 'Create Presentation'}
+                {isProcessing ? 'Creating...' : '📋 Create Presentation'}
               </Text>
             </LinearGradient>
+          </TouchableOpacity>
+
+          {/* Scan Verification Request Button */}
+          <TouchableOpacity
+            style={styles.scanButton}
+            onPress={openScanner}
+          >
+            <Text style={styles.scanButtonText}>📷 Scan Verification Request</Text>
           </TouchableOpacity>
         </>
       )}
@@ -254,17 +420,20 @@ export default function VerifyScreen() {
     </ScrollView>
   );
 
+  // ============================================
+  // RENDER VERIFY MODE
+  // ============================================
   const renderVerifyMode = () => (
     <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Verify Presentation</Text>
         <Text style={styles.sectionSubtitle}>
-          Paste a VP JWT to verify its authenticity
+          Paste a VP JWT to verify
         </Text>
       </View>
 
       <View style={styles.section}>
-        <Text style={styles.label}>Verifiable Presentation JWT</Text>
+        <Text style={styles.label}>VP JWT</Text>
         <TextInput
           style={[styles.input, styles.textArea]}
           placeholder="Paste VP JWT here..."
@@ -277,10 +446,10 @@ export default function VerifyScreen() {
       </View>
 
       <View style={styles.section}>
-        <Text style={styles.label}>Challenge (if used during creation)</Text>
+        <Text style={styles.label}>Challenge (Optional)</Text>
         <TextInput
           style={styles.input}
-          placeholder="Leave empty if no challenge was used"
+          placeholder="Leave empty if no challenge"
           placeholderTextColor="#666"
           value={challenge}
           onChangeText={setChallenge}
@@ -318,7 +487,7 @@ export default function VerifyScreen() {
           style={styles.actionButtonGradient}
         >
           <Text style={styles.actionButtonText}>
-            {isProcessing ? 'Verifying...' : 'Verify Presentation'}
+            {isProcessing ? 'Verifying...' : '🔍 Verify'}
           </Text>
         </LinearGradient>
       </TouchableOpacity>
@@ -327,7 +496,7 @@ export default function VerifyScreen() {
         style={styles.clearButton}
         onPress={clearVerifyForm}
       >
-        <Text style={styles.clearButtonText}>Clear Form</Text>
+        <Text style={styles.clearButtonText}>Clear</Text>
       </TouchableOpacity>
 
       <View style={{ height: 40 }} />
@@ -342,6 +511,7 @@ export default function VerifyScreen() {
         <Text style={styles.headerTitle}>Presentations</Text>
       </View>
 
+      {/* Mode Switcher */}
       <View style={styles.modeSwitcher}>
         <TouchableOpacity
           style={[styles.modeButton, mode === 'create' && styles.modeButtonActive]}
@@ -362,6 +532,46 @@ export default function VerifyScreen() {
       </View>
 
       {mode === 'create' ? renderCreateMode() : renderVerifyMode()}
+
+      {/* Scanner Modal */}
+      <Modal
+        visible={showScanner}
+        animationType="slide"
+        onRequestClose={() => setShowScanner(false)}
+      >
+        <View style={styles.scannerContainer}>
+          <View style={styles.scannerHeader}>
+            <Text style={styles.scannerTitle}>Scan Verification Request</Text>
+            <TouchableOpacity onPress={() => setShowScanner(false)}>
+              <Text style={styles.closeText}>✕</Text>
+            </TouchableOpacity>
+          </View>
+
+          <CameraView
+            style={styles.camera}
+            facing="back"
+            onBarcodeScanned={scanned ? undefined : handleScanRequest}
+            barcodeScannerSettings={{
+              barcodeTypes: ['qr'],
+            }}
+          >
+            <View style={styles.overlay}>
+              <View style={styles.scanArea}>
+                <View style={[styles.corner, styles.topLeft]} />
+                <View style={[styles.corner, styles.topRight]} />
+                <View style={[styles.corner, styles.bottomLeft]} />
+                <View style={[styles.corner, styles.bottomRight]} />
+              </View>
+            </View>
+          </CameraView>
+
+          <View style={styles.scannerInstructions}>
+            <Text style={styles.scannerInstructionText}>
+              Point camera at verifier's QR code
+            </Text>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -423,6 +633,34 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#888',
     marginBottom: 16,
+  },
+  requestCard: {
+    backgroundColor: '#1a2a3a',
+    borderRadius: 12,
+    padding: 16,
+    marginHorizontal: 20,
+    marginBottom: 20,
+    borderWidth: 2,
+    borderColor: '#2a4a5a',
+  },
+  requestTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#4ade80',
+    marginBottom: 12,
+  },
+  requestRow: {
+    marginBottom: 8,
+  },
+  requestLabel: {
+    fontSize: 12,
+    color: '#888',
+    marginBottom: 4,
+  },
+  requestValue: {
+    fontSize: 14,
+    color: '#fff',
+    fontWeight: '500',
   },
   credentialItem: {
     flexDirection: 'row',
@@ -487,12 +725,6 @@ const styles = StyleSheet.create({
     minHeight: 100,
     textAlignVertical: 'top',
   },
-  hint: {
-    fontSize: 12,
-    color: '#666',
-    marginTop: 4,
-    fontStyle: 'italic',
-  },
   selectedCount: {
     fontSize: 14,
     color: '#667eea',
@@ -512,6 +744,20 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: 'bold',
     color: '#fff',
+  },
+  scanButton: {
+    marginHorizontal: 20,
+    padding: 16,
+    alignItems: 'center',
+    backgroundColor: '#1a1a2e',
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: '#2a2a3e',
+  },
+  scanButtonText: {
+    color: '#667eea',
+    fontSize: 16,
+    fontWeight: '600',
   },
   clearButton: {
     marginHorizontal: 20,
@@ -552,5 +798,87 @@ const styles = StyleSheet.create({
   resultError: {
     fontSize: 14,
     color: '#ef4444',
+  },
+  scannerContainer: {
+    flex: 1,
+    backgroundColor: '#0a0a0f',
+  },
+  scannerHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingTop: 60,
+    paddingBottom: 20,
+  },
+  scannerTitle: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: '#fff',
+  },
+  closeText: {
+    fontSize: 32,
+    color: '#fff',
+    fontWeight: 'bold',
+  },
+  camera: {
+    flex: 1,
+    margin: 20,
+    borderRadius: 20,
+    overflow: 'hidden',
+  },
+  overlay: {
+    flex: 1,
+    backgroundColor: 'transparent',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  scanArea: {
+    width: 250,
+    height: 250,
+    position: 'relative',
+  },
+  corner: {
+    position: 'absolute',
+    width: 40,
+    height: 40,
+    borderColor: '#667eea',
+  },
+  topLeft: {
+    top: 0,
+    left: 0,
+    borderTopWidth: 4,
+    borderLeftWidth: 4,
+    borderTopLeftRadius: 10,
+  },
+  topRight: {
+    top: 0,
+    right: 0,
+    borderTopWidth: 4,
+    borderRightWidth: 4,
+    borderTopRightRadius: 10,
+  },
+  bottomLeft: {
+    bottom: 0,
+    left: 0,
+    borderBottomWidth: 4,
+    borderLeftWidth: 4,
+    borderBottomLeftRadius: 10,
+  },
+  bottomRight: {
+    bottom: 0,
+    right: 0,
+    borderBottomWidth: 4,
+    borderRightWidth: 4,
+    borderBottomRightRadius: 10,
+  },
+  scannerInstructions: {
+    padding: 20,
+    backgroundColor: '#1a1a2e',
+  },
+  scannerInstructionText: {
+    fontSize: 16,
+    color: '#fff',
+    textAlign: 'center',
   },
 });
