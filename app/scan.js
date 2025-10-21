@@ -1,5 +1,5 @@
-// wallet/app/scan.js
-// FIXED: Check DID exists before allowing credential claim
+// wallet-app/app/scan.js
+// FIXED: Camera properly reinitializes when returning from other tabs
 
 import { useState, useEffect, useCallback } from 'react';
 import {
@@ -24,21 +24,51 @@ export default function ScanScreen() {
   const [scanned, setScanned] = useState(false);
   const [processing, setProcessing] = useState(false);
   const [walletInfo, setWalletInfo] = useState(null);
+  const [isCameraReady, setIsCameraReady] = useState(false);
+  const [isScreenFocused, setIsScreenFocused] = useState(false);
 
-  // ✅ FIX: Reload wallet info every time screen comes into focus
+  // ✅ FIX: Reset camera state when screen comes into focus
   useFocusEffect(
     useCallback(() => {
+      console.log('📷 Scan screen focused');
+      setIsScreenFocused(true);
+      setScanned(false);
+      setProcessing(false);
+      setIsCameraReady(false);
       loadWallet();
+
+      // Cleanup when screen loses focus
+      return () => {
+        console.log('📷 Scan screen unfocused');
+        setIsScreenFocused(false);
+        setIsCameraReady(false);
+      };
     }, [])
   );
 
   const loadWallet = async () => {
-    const info = await didManager.getWalletInfo();
-    setWalletInfo(info);
+    try {
+      const hasWallet = await didManager.hasWallet();
+      if (hasWallet) {
+        const info = await didManager.getWalletInfo();
+        setWalletInfo(info);
+      } else {
+        setWalletInfo(null);
+      }
+    } catch (error) {
+      logger.error('Failed to load wallet info');
+      setWalletInfo(null);
+    }
+  };
+
+  // ✅ FIX: Handle camera ready state
+  const handleCameraReady = () => {
+    console.log('📷 Camera ready');
+    setIsCameraReady(true);
   };
 
   const handleBarCodeScanned = async ({ data }) => {
-    if (scanned || processing) return;
+    if (scanned || processing || !isCameraReady) return;
 
     setScanned(true);
     setProcessing(true);
@@ -46,18 +76,18 @@ export default function ScanScreen() {
     try {
       logger.info('📷 QR Code scanned');
 
-      // ✅ FIX: Check if wallet exists FIRST
+      // Check if wallet exists FIRST
       if (!walletInfo?.did) {
         throw new Error('No DID found. Please create your identity first.\n\nGo to Home screen → Click "Create Your Identity"');
       }
 
-      // ✅ FIX: Check if DID is registered on blockchain
+      // Check if DID is registered on blockchain
       const holderAddress = walletInfo.did.split(':').pop();
-      
+
       logger.info('🔍 Checking DID registration on blockchain...');
-      
+
       const registrationCheck = await apiClient.get(`/check-registration/${holderAddress}`);
-      
+
       if (!registrationCheck.data.registered) {
         throw new Error('Your DID is not registered on blockchain yet.\n\nPlease wait a moment for blockchain confirmation, or try creating your identity again.');
       }
@@ -118,18 +148,16 @@ export default function ScanScreen() {
         '✅ Credential Claimed!',
         `${claimToken.credentialData.credentialType} has been added to your wallet.\n\n🔐 Securely verified and issued.\n\nGo to the Wallet tab to view it.`,
         [
-          { 
-            text: 'View Wallet', 
+          {
+            text: 'View Wallet',
             onPress: () => {
-              setScanned(false);
-              setProcessing(false);
+              resetScanState();
             }
           },
           {
             text: 'Scan Another',
             onPress: () => {
-              setScanned(false);
-              setProcessing(false);
+              resetScanState();
             }
           }
         ]
@@ -137,7 +165,7 @@ export default function ScanScreen() {
 
     } catch (error) {
       logger.error('Failed to claim credential: ' + error.message);
-      
+
       let errorTitle = '❌ Claim Failed';
       let errorMessage = error.message;
 
@@ -158,7 +186,7 @@ export default function ScanScreen() {
         errorTitle = '🚫 Not For You';
         errorMessage = error.message;
       }
-      
+
       Alert.alert(
         errorTitle,
         errorMessage,
@@ -166,13 +194,19 @@ export default function ScanScreen() {
           {
             text: 'OK',
             onPress: () => {
-              setScanned(false);
-              setProcessing(false);
+              resetScanState();
             }
           }
         ]
       );
     }
+  };
+
+  // ✅ FIX: Proper state reset
+  const resetScanState = () => {
+    setScanned(false);
+    setProcessing(false);
+    // Don't reset isCameraReady - let it stay ready
   };
 
   if (!permission) {
@@ -216,8 +250,8 @@ export default function ScanScreen() {
         <Text style={styles.headerSubtitle}>
           Point camera at credential QR code
         </Text>
-        
-        {/* ✅ DID Status Indicator */}
+
+        {/* DID Status Indicator */}
         {walletInfo?.did ? (
           <View style={styles.didStatusCard}>
             <Text style={styles.didStatusIcon}>✅</Text>
@@ -242,28 +276,46 @@ export default function ScanScreen() {
       </View>
 
       <View style={styles.cameraContainer}>
-        <CameraView
-          style={styles.camera}
-          facing="back"
-          onBarcodeScanned={scanned ? undefined : handleBarCodeScanned}
-          barcodeScannerSettings={{
-            barcodeTypes: ['qr'],
-          }}
-        >
-          <View style={styles.overlay}>
-            <View style={styles.scanArea}>
-              <View style={[styles.corner, styles.topLeft]} />
-              <View style={[styles.corner, styles.topRight]} />
-              <View style={[styles.corner, styles.bottomLeft]} />
-              <View style={[styles.corner, styles.bottomRight]} />
+        {/* ✅ FIX: Only render camera when screen is focused */}
+        {isScreenFocused && permission.granted ? (
+          <CameraView
+            key={isScreenFocused ? 'focused' : 'unfocused'} // Force remount
+            style={styles.camera}
+            facing="back"
+            onBarcodeScanned={scanned ? undefined : handleBarCodeScanned}
+            onCameraReady={handleCameraReady}
+            barcodeScannerSettings={{
+              barcodeTypes: ['qr'],
+            }}
+          >
+            <View style={styles.overlay}>
+              <View style={styles.scanArea}>
+                <View style={[styles.corner, styles.topLeft]} />
+                <View style={[styles.corner, styles.topRight]} />
+                <View style={[styles.corner, styles.bottomLeft]} />
+                <View style={[styles.corner, styles.bottomRight]} />
+              </View>
             </View>
+          </CameraView>
+        ) : (
+          <View style={styles.cameraLoading}>
+            <ActivityIndicator size="large" color="#667eea" />
+            <Text style={styles.cameraLoadingText}>Loading camera...</Text>
           </View>
-        </CameraView>
+        )}
 
         {processing && (
           <View style={styles.processingOverlay}>
             <ActivityIndicator size="large" color="#fff" />
             <Text style={styles.processingText}>Processing credential...</Text>
+          </View>
+        )}
+
+        {/* Camera Status Indicator */}
+        {isScreenFocused && !isCameraReady && !processing && (
+          <View style={styles.cameraStatusOverlay}>
+            <ActivityIndicator size="small" color="#667eea" />
+            <Text style={styles.cameraStatusText}>Initializing camera...</Text>
           </View>
         )}
       </View>
@@ -281,7 +333,7 @@ export default function ScanScreen() {
       {scanned && !processing && (
         <TouchableOpacity
           style={styles.resetButton}
-          onPress={() => setScanned(false)}
+          onPress={resetScanState}
         >
           <LinearGradient
             colors={['#667eea', '#764ba2']}
@@ -358,6 +410,17 @@ const styles = StyleSheet.create({
   camera: {
     flex: 1,
   },
+  cameraLoading: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#000',
+  },
+  cameraLoadingText: {
+    color: '#fff',
+    fontSize: 14,
+    marginTop: 12,
+  },
   overlay: {
     flex: 1,
     backgroundColor: 'transparent',
@@ -417,6 +480,21 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 16,
     marginTop: 16,
+    fontWeight: '600',
+  },
+  cameraStatusOverlay: {
+    position: 'absolute',
+    bottom: 20,
+    left: 0,
+    right: 0,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 8,
+  },
+  cameraStatusText: {
+    color: '#667eea',
+    fontSize: 12,
     fontWeight: '600',
   },
   instructions: {
