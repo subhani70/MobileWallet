@@ -1,8 +1,17 @@
 // services/secureStorage.js
-// Secure storage for keys, DIDs, and credentials using device encryption
+// Secure storage with PIN and Mnemonic support
 
 import * as SecureStore from 'expo-secure-store';
-import logger from '../utils/logger';
+
+// Note: logger import removed for testing - add back when integrating with full app
+// import logger from '../utils/logger.js';
+
+const logger = {
+  success: (msg) => console.log('✅', msg),
+  error: (msg) => console.error('❌', msg),
+  info: (msg) => console.log('ℹ️', msg),
+  warning: (msg) => console.warn('⚠️', msg)
+};
 
 // Storage keys
 const STORAGE_KEYS = {
@@ -10,9 +19,12 @@ const STORAGE_KEYS = {
   PUBLIC_KEY: 'ssi_public_key',
   DID: 'ssi_did',
   ADDRESS: 'ssi_address',
+  MNEMONIC: 'ssi_mnemonic',
+  PIN_HASH: 'ssi_pin_hash',
   CREDENTIALS: 'ssi_credentials',
   WALLET_INITIALIZED: 'ssi_wallet_initialized',
   BIOMETRIC_ENABLED: 'ssi_biometric_enabled',
+  ONBOARDING_COMPLETED: 'ssi_onboarding_completed',
 };
 
 /**
@@ -60,11 +72,33 @@ export const deleteSecure = async (key) => {
 };
 
 // ============================================
-// WALLET KEY MANAGEMENT
+// WALLET KEY MANAGEMENT (Updated with Mnemonic)
 // ============================================
 
 /**
- * Save wallet keys (private key stays encrypted on device)
+ * Save wallet keys from mnemonic (NEW PRIMARY METHOD)
+ */
+export const saveWalletFromMnemonic = async (privateKey, publicKey, address, did, mnemonic, pinHash) => {
+  try {
+    await saveSecure(STORAGE_KEYS.PRIVATE_KEY, privateKey);
+    await saveSecure(STORAGE_KEYS.PUBLIC_KEY, publicKey);
+    await saveSecure(STORAGE_KEYS.ADDRESS, address);
+    await saveSecure(STORAGE_KEYS.DID, did);
+    await saveSecure(STORAGE_KEYS.MNEMONIC, mnemonic);
+    await saveSecure(STORAGE_KEYS.PIN_HASH, pinHash);
+    await saveSecure(STORAGE_KEYS.WALLET_INITIALIZED, 'true');
+    await saveSecure(STORAGE_KEYS.ONBOARDING_COMPLETED, 'true');
+    
+    logger.success('✅ Wallet with mnemonic saved securely');
+    return true;
+  } catch (error) {
+    logger.error('Failed to save wallet');
+    throw error;
+  }
+};
+
+/**
+ * Save wallet keys (legacy method - kept for backward compatibility)
  */
 export const saveWalletKeys = async (privateKey, publicKey, address, did) => {
   try {
@@ -111,11 +145,59 @@ export const getDID = async () => {
 };
 
 /**
+ * Get mnemonic phrase (NEW)
+ */
+export const getMnemonic = async () => {
+  return await getSecure(STORAGE_KEYS.MNEMONIC);
+};
+
+/**
  * Check if wallet is initialized
  */
 export const isWalletInitialized = async () => {
   const initialized = await getSecure(STORAGE_KEYS.WALLET_INITIALIZED);
   return initialized === 'true';
+};
+
+/**
+ * Check if onboarding completed (NEW)
+ */
+export const isOnboardingCompleted = async () => {
+  const completed = await getSecure(STORAGE_KEYS.ONBOARDING_COMPLETED);
+  return completed === 'true';
+};
+
+// ============================================
+// PIN MANAGEMENT (NEW)
+// ============================================
+
+/**
+ * Save PIN hash
+ */
+export const savePINHash = async (pinHash) => {
+  try {
+    await saveSecure(STORAGE_KEYS.PIN_HASH, pinHash);
+    logger.success('🔐 PIN saved securely');
+    return true;
+  } catch (error) {
+    logger.error('Failed to save PIN');
+    throw error;
+  }
+};
+
+/**
+ * Get PIN hash
+ */
+export const getPINHash = async () => {
+  return await getSecure(STORAGE_KEYS.PIN_HASH);
+};
+
+/**
+ * Check if PIN is set
+ */
+export const isPINSet = async () => {
+  const pinHash = await getPINHash();
+  return pinHash !== null && pinHash !== undefined;
 };
 
 // ============================================
@@ -202,9 +284,12 @@ export const clearWallet = async () => {
     await deleteSecure(STORAGE_KEYS.PUBLIC_KEY);
     await deleteSecure(STORAGE_KEYS.ADDRESS);
     await deleteSecure(STORAGE_KEYS.DID);
+    await deleteSecure(STORAGE_KEYS.MNEMONIC);
+    await deleteSecure(STORAGE_KEYS.PIN_HASH);
     await deleteSecure(STORAGE_KEYS.CREDENTIALS);
     await deleteSecure(STORAGE_KEYS.WALLET_INITIALIZED);
     await deleteSecure(STORAGE_KEYS.BIOMETRIC_ENABLED);
+    await deleteSecure(STORAGE_KEYS.ONBOARDING_COMPLETED);
     
     logger.warning('⚠️ Wallet cleared');
     return true;
@@ -237,12 +322,18 @@ export default {
   saveSecure,
   getSecure,
   deleteSecure,
+  saveWalletFromMnemonic,
   saveWalletKeys,
   getPrivateKey,
   getPublicKey,
   getAddress,
   getDID,
+  getMnemonic,
   isWalletInitialized,
+  isOnboardingCompleted,
+  savePINHash,
+  getPINHash,
+  isPINSet,
   saveCredentials,
   getCredentials,
   addCredential,

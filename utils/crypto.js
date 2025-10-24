@@ -1,49 +1,59 @@
 // utils/crypto.js
-// Cryptographic utilities for key generation and encryption
+// Cryptographic utilities with BIP-39 mnemonic support
 
 import * as Crypto from 'expo-crypto';
 import { ethers } from 'ethers';
 import { Buffer } from 'buffer';
+import { mnemonicToSeed } from './mnemonicUtils.js';
+
+global.Buffer = Buffer;
 
 /**
- * Custom random bytes generator for React Native
- * This replaces ethers' built-in randomBytes which doesn't work in React Native
+ * Generate wallet from BIP-39 mnemonic (PRODUCTION METHOD)
+ * This is the new standard method using mnemonic phrases
+ * @param {string} mnemonic - 12-word BIP-39 mnemonic phrase
+ * @returns {Promise<object>} Wallet with privateKey, publicKey, address, did
  */
-global.Buffer = Buffer;
-const getRandomBytes = async (length) => {
-  const randomBytes = await Crypto.getRandomBytesAsync(length);
-  return randomBytes;
+export const generateWalletFromMnemonic = async (mnemonic) => {
+  try {
+    // Convert mnemonic to seed
+    const seed = await mnemonicToSeed(mnemonic);
+    
+    // Create HD wallet from seed (BIP-32/BIP-44 derivation path)
+    // Using Ethereum's standard derivation path: m/44'/60'/0'/0/0
+    const hdNode = ethers.HDNodeWallet.fromSeed(seed);
+    const derivationPath = "m/44'/60'/0'/0/0";
+    const wallet = hdNode.derivePath(derivationPath);
+    
+    // Get public key
+    let publicKey;
+    if (wallet.signingKey && wallet.signingKey.publicKey) {
+      publicKey = wallet.signingKey.publicKey;
+    } else if (wallet.publicKey) {
+      publicKey = wallet.publicKey;
+    } else {
+      publicKey = ethers.SigningKey.computePublicKey(wallet.privateKey, false);
+    }
+    
+    publicKey = String(publicKey);
+    
+    return {
+      privateKey: wallet.privateKey,
+      publicKey: publicKey,
+      address: wallet.address,
+      did: `did:ethr:VoltusWave:${wallet.address.toLowerCase()}`,
+      mnemonic: mnemonic // Include for reference
+    };
+  } catch (error) {
+    console.error('Error generating wallet from mnemonic:', error);
+    throw error;
+  }
 };
 
 /**
  * Generate a new Ethereum key pair locally on device
  * Using Expo Crypto for React Native compatibility
  */
-
-// export const generateKeyPair = async () => {
-//   try {
-//     // Generate 32 random bytes using Expo Crypto (React Native compatible)
-//     const randomBytes = await Crypto.getRandomBytesAsync(32);
-
-//     // Convert to hex string for private key
-//     const privateKeyHex = '0x' + Buffer.from(randomBytes).toString('hex');
-
-//     // Create wallet from private key (works in React Native)
-//     const wallet = new ethers.Wallet(privateKeyHex);
-
-//     // Return all values as strings for secure storage
-//     return {
-//       privateKey: wallet.privateKey,
-//       publicKey: wallet.publicKey,
-//       address: wallet.address,
-//       did: `did:ethr:${wallet.address.toLowerCase()}`
-//     };
-//   } catch (error) {
-//     console.error('Error generating key pair:', error);
-//     throw error;
-//   }
-// };
-
 export const generateKeyPair = async () => {
   try {
     const randomBytes = await Crypto.getRandomBytesAsync(32);
@@ -68,7 +78,6 @@ export const generateKeyPair = async () => {
       privateKey: wallet.privateKey,
       publicKey: publicKey,
       address: wallet.address,
-      // did: `did:ethr:${wallet.address.toLowerCase()}`
       did: `did:ethr:VoltusWave:${wallet.address.toLowerCase()}`
     };
   } catch (error) {
@@ -82,7 +91,7 @@ export const generateKeyPair = async () => {
  * Format: did:ethr:<Network>:<address>
  */
 export const createDID = (address) => {
-  return `did:ethr:VoltusWave:${address.toLowerCase()}`; // Add 'development:'
+  return `did:ethr:VoltusWave:${address.toLowerCase()}`;
 };
 
 /**
@@ -154,6 +163,18 @@ export const getAddressFromPrivateKey = (privateKey) => {
 };
 
 /**
+ * Restore wallet from mnemonic phrase (PRODUCTION RECOVERY METHOD)
+ */
+export const restoreFromMnemonic = async (mnemonic) => {
+  try {
+    return await generateWalletFromMnemonic(mnemonic);
+  } catch (error) {
+    console.error('Error restoring from mnemonic:', error);
+    throw error;
+  }
+};
+
+/**
  * Create a deterministic wallet from seed
  * Useful for wallet recovery
  */
@@ -171,46 +192,6 @@ export const createWalletFromSeed = async (seed) => {
     };
   } catch (error) {
     console.error('Error creating wallet from seed:', error);
-    throw error;
-  }
-};
-
-/**
- * Generate a mnemonic phrase for wallet recovery
- * Note: This won't work with ethers.Wallet.createRandom() in React Native
- * So we create our own implementation
- */
-export const generateMnemonic = async () => {
-  try {
-    // Generate entropy for mnemonic (128 bits = 12 words)
-    const entropy = await Crypto.getRandomBytesAsync(16);
-    const entropyHex = Buffer.from(entropy).toString('hex');
-
-    // Create wallet from entropy
-    const mnemonic = ethers.Mnemonic.entropyToPhrase(entropyHex);
-
-    return mnemonic;
-  } catch (error) {
-    console.error('Error generating mnemonic:', error);
-    // Fallback: return a simple recovery phrase
-    return null;
-  }
-};
-
-/**
- * Restore wallet from mnemonic phrase
- */
-export const restoreFromMnemonic = (mnemonic) => {
-  try {
-    const wallet = ethers.Wallet.fromPhrase(mnemonic);
-    return {
-      privateKey: wallet.privateKey,
-      publicKey: wallet.publicKey,
-      address: wallet.address,
-      did: `did:ethr:${wallet.address.toLowerCase()}`
-    };
-  } catch (error) {
-    console.error('Error restoring from mnemonic:', error);
     throw error;
   }
 };
@@ -235,7 +216,6 @@ export const generateSimpleKeyPair = async () => {
     return {
       privateKey: privateKeyHex,
       address: wallet.address,
-      // did: `did:ethr:${wallet.address.toLowerCase()}`
       did: `did:ethr:VoltusWave:${wallet.address.toLowerCase()}`
     };
   } catch (error) {

@@ -17,6 +17,7 @@ import * as didManager from '../services/didManager';
 import * as secureStorage from '../services/secureStorage';
 import * as biometric from '../services/biometric';
 import logger from '../utils/logger';
+import 'react-native-get-random-values';
 
 export default function HomeScreen() {
   const [isConnected, setIsConnected] = useState(false);

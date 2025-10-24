@@ -1,5 +1,6 @@
 import { Tabs } from 'expo-router';
 import { Text } from 'react-native';
+import 'react-native-get-random-values';
 
 export default function RootLayout() {
   return (
@@ -63,6 +64,27 @@ export default function RootLayout() {
           ),
         }}
       />
+
+      <Tabs.Screen
+        name="test"
+        options={{
+          title: 'Test',
+          tabBarIcon: ({ color }) => (
+            <Text style={{ fontSize: 24, color }}>🧪</Text>
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="testtsx"
+        options={{
+          title: 'Testtsx',
+          tabBarIcon: ({ color }) => (
+            <Text style={{ fontSize: 24, color }}>🧪</Text>
+          ),
+        }}
+      />
+
     </Tabs>
+
   );
 }
