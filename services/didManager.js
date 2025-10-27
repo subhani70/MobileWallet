@@ -1,8 +1,10 @@
-import { generateKeyPair, createDID, signData } from '../utils/crypto';
+// services/didManager.js - MNEMONIC-BASED DID CREATION
+import { generateWalletFromMnemonic } from '../utils/crypto';
+import { generateMnemonic, validateMnemonic } from '../utils/mnemonicUtils';
+import { hashPIN } from '../utils/pinUtils';
 import * as secureStorage from './secureStorage';
 import apiClient from './api';
 import logger from '../utils/logger';
-import API_CONFIG from '../config/config';
 
 /**
  * Poll blockchain to wait for DID registration confirmation
@@ -20,8 +22,6 @@ const waitForRegistration = async (address, maxAttempts = 10, delayMs = 3000) =>
       }
       
       logger.info(`   Attempt ${i + 1}/${maxAttempts} - Not confirmed yet, waiting...`);
-      
-      // Wait before next attempt
       await new Promise(resolve => setTimeout(resolve, delayMs));
       
     } catch (error) {
@@ -39,14 +39,13 @@ const registerDIDOnBlockchain = async (did, publicKey, address, privateKey) => {
   try {
     logger.info('📡 Registering DID on blockchain...');
     
-    // Create proof that you own this address
+    const { signData } = require('../utils/crypto');
     const message = `Register DID: ${did}`;
     const signature = await signData(privateKey, message);
     
     logger.info('🔐 Signed proof of ownership');
     logger.info('📤 Sending to backend...');
     
-    // Backend will verify signature and submit transaction
     const response = await apiClient.post('/register-on-chain', {
       did,
       publicKey,
@@ -62,7 +61,7 @@ const registerDIDOnBlockchain = async (did, publicKey, address, privateKey) => {
     logger.success(`⛓️ Transaction submitted!`);
     logger.success(`🔗 TX Hash: ${response.data.txHash}`);
     
-    // ✅ FIX: Wait for blockchain confirmation
+    // Wait for blockchain confirmation
     const confirmation = await waitForRegistration(address);
     
     if (!confirmation.success) {
@@ -82,83 +81,139 @@ const registerDIDOnBlockchain = async (did, publicKey, address, privateKey) => {
 };
 
 /**
- * Create new DID locally and register on blockchain
+ * STRICT: Create DID from BIP-39 Mnemonic - Must succeed on blockchain or fail completely
+ * This creates a MetaMask-compatible wallet!
  */
 export const createLocalDID = async () => {
+  let mnemonic = null;
+  let keysGenerated = false;
+  
   try {
-    logger.info('🔑 Generating key pair locally...');
-
-    const { privateKey, publicKey, address, did } = await generateKeyPair();
-    logger.success(`🆔 DID created locally: ${did}`);
-
-    // Save keys first (so user doesn't lose them if blockchain registration fails)
-    await secureStorage.saveWalletKeys(privateKey, publicKey, address, did);
-    logger.success('💾 Keys saved securely on device');
-
+    // Step 1: Check backend connectivity first
+    logger.info('🌐 Checking blockchain connectivity...');
     try {
-      // Register on blockchain and WAIT for confirmation
-      const result = await registerDIDOnBlockchain(did, publicKey, address, privateKey);
-      
-      logger.success('✅ DID registered and confirmed on blockchain');
-      
-      return { 
-        did, 
-        address, 
-        publicKey,
-        registered: true,
-        txHash: result.txHash,
-        blockNumber: result.blockNumber
-      };
-      
+      await apiClient.get('/health');
     } catch (error) {
-      logger.warning('⚠️ DID created locally but blockchain registration failed');
-      logger.warning('You can try registering again later');
-      
-      return { 
-        did, 
-        address, 
-        publicKey,
-        registered: false,
-        error: error.message
-      };
+      throw new Error('Blockchain network is not accessible. Please check your connection.');
     }
-
+    
+    // Step 2: Generate BIP-39 mnemonic (12 words)
+    logger.info('🎲 Generating BIP-39 mnemonic phrase...');
+    mnemonic = generateMnemonic();
+    
+    if (!validateMnemonic(mnemonic)) {
+      throw new Error('Generated mnemonic is invalid');
+    }
+    
+    logger.success('✅ Mnemonic generated: 12 words');
+    logger.info('📝 First word: ' + mnemonic.split(' ')[0] + '...');
+    
+    // Step 3: Derive wallet from mnemonic (MetaMask compatible - m/44'/60'/0'/0/0)
+    logger.info('🔑 Deriving cryptographic keys from mnemonic...');
+    const walletData = await generateWalletFromMnemonic(mnemonic);
+    keysGenerated = true;
+    
+    logger.success(`✅ Wallet derived!`);
+    logger.info(`🆔 DID: ${walletData.did}`);
+    logger.info(`📍 Address: ${walletData.address}`);
+    
+    // Step 4: Create a temporary PIN hash (you can skip this if not using PIN yet)
+    // For now, we'll use a placeholder - users can set PIN later
+    const tempPIN = '000000'; // Temporary placeholder
+    const pinHash = await hashPIN(tempPIN);
+    
+    // Step 5: Save wallet with mnemonic
+    logger.info('💾 Securing wallet...');
+    await secureStorage.saveWalletFromMnemonic(
+      walletData.privateKey,
+      walletData.publicKey,
+      walletData.address,
+      walletData.did,
+      mnemonic,
+      pinHash
+    );
+    
+    logger.success('✅ Wallet saved securely');
+    
+    // Step 6: Register on blockchain (MUST SUCCEED)
+    logger.info('⛓️ Registering on blockchain...');
+    const registrationResult = await registerDIDOnBlockchain(
+      walletData.did,
+      walletData.publicKey,
+      walletData.address,
+      walletData.privateKey
+    );
+    
+    if (!registrationResult.success) {
+      throw new Error('Blockchain registration failed. Transaction was not confirmed.');
+    }
+    
+    logger.success('✅ DID fully registered and confirmed on blockchain!');
+    logger.success(`📦 Block: ${registrationResult.blockNumber}`);
+    logger.success(`🔗 TX Hash: ${registrationResult.txHash}`);
+    
+    return { 
+      did: walletData.did, 
+      address: walletData.address, 
+      publicKey: walletData.publicKey,
+      mnemonic: mnemonic, // Return mnemonic so user can back it up
+      registered: true,
+      txHash: registrationResult.txHash,
+      blockNumber: registrationResult.blockNumber
+    };
+    
   } catch (error) {
-    logger.error('Failed to create DID');
-    throw error;
+    logger.error('❌ DID creation failed: ' + error.message);
+    
+    // Clean up if keys were generated
+    if (keysGenerated) {
+      logger.info('🧹 Cleaning up failed attempt...');
+      await secureStorage.clearWallet();
+    }
+    
+    // Re-throw with clear message
+    throw new Error(error.message || 'Failed to create digital identity');
   }
 };
 
 /**
- * Retry registration for existing DID
+ * Restore wallet from existing mnemonic
  */
-export const retryRegistration = async () => {
+export const restoreFromMnemonic = async (mnemonic, pin) => {
   try {
-    const did = await secureStorage.getDID();
-    const address = await secureStorage.getAddress();
-    const publicKey = await secureStorage.getPublicKey();
-    const privateKey = await secureStorage.getPrivateKey();
-    
-    if (!did || !address || !publicKey || !privateKey) {
-      throw new Error('No wallet found. Create your identity first.');
+    // Validate mnemonic
+    if (!validateMnemonic(mnemonic)) {
+      throw new Error('Invalid recovery phrase. Please check and try again.');
     }
     
-    logger.info('🔄 Retrying DID registration...');
+    logger.info('🔄 Restoring wallet from mnemonic...');
     
-    // Check if already registered
-    const checkResponse = await apiClient.get(`/check-registration/${address}`);
-    if (checkResponse.data.registered) {
-      logger.success('✅ DID is already registered!');
-      return { success: true, alreadyRegistered: true };
-    }
+    // Derive wallet
+    const walletData = await generateWalletFromMnemonic(mnemonic);
     
-    // Try to register again
-    const result = await registerDIDOnBlockchain(did, publicKey, address, privateKey);
+    // Hash PIN
+    const pinHash = await hashPIN(pin);
     
-    return { success: true, ...result };
+    // Save wallet
+    await secureStorage.saveWalletFromMnemonic(
+      walletData.privateKey,
+      walletData.publicKey,
+      walletData.address,
+      walletData.did,
+      mnemonic,
+      pinHash
+    );
+    
+    logger.success('✅ Wallet restored successfully');
+    
+    return {
+      did: walletData.did,
+      address: walletData.address,
+      publicKey: walletData.publicKey,
+    };
     
   } catch (error) {
-    logger.error('Retry registration failed: ' + error.message);
+    logger.error('Failed to restore wallet: ' + error.message);
     throw error;
   }
 };
@@ -171,35 +226,21 @@ export const getWalletInfo = async () => {
   const did = await secureStorage.getDID();
   const address = await secureStorage.getAddress();
   const publicKey = await secureStorage.getPublicKey();
-  return { did, address, publicKey };
+  const mnemonic = await secureStorage.getMnemonic();
+  return { did, address, publicKey, hasMnemonic: !!mnemonic };
 };
 
-export const signLocally = async (data) => {
-  try {
-    const privateKey = await secureStorage.getPrivateKey();
-    if (!privateKey) {
-      throw new Error('No private key found');
-    }
-    const signature = await signData(privateKey, data);
-    logger.success('✍️ Data signed locally');
-    return signature;
-  } catch (error) {
-    logger.error('Failed to sign data');
-    throw error;
-  }
+export const getMnemonic = async () => {
+  return await secureStorage.getMnemonic();
 };
 
 export const hasWallet = async () => {
   return await secureStorage.isWalletInitialized();
 };
 
-/**
- * Check if DID is registered - via backend API
- */
 export const checkDIDRegistration = async (address) => {
   try {
     logger.info('🔍 Checking DID registration...');
-    
     const response = await apiClient.get(`/check-registration/${address}`);
     
     if (response.data.registered) {
@@ -210,22 +251,18 @@ export const checkDIDRegistration = async (address) => {
     }
     
     return response.data;
-    
   } catch (error) {
     logger.error('Failed to check registration: ' + error.message);
-    return { 
-      registered: false, 
-      error: error.message 
-    };
+    return { registered: false, error: error.message };
   }
 };
 
 export default {
   createLocalDID,
-  retryRegistration,
+  restoreFromMnemonic,
   getCurrentDID,
   getWalletInfo,
-  signLocally,
+  getMnemonic,
   hasWallet,
   checkDIDRegistration,
 };

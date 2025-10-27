@@ -14,10 +14,10 @@ import {
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect } from '@react-navigation/native';
-import * as didManager from '../services/didManager';
-import * as secureStorage from '../services/secureStorage';
-import apiClient from '../services/api';
-import logger from '../utils/logger';
+import * as didManager from '../../services/didManager';
+import * as secureStorage from '../../services/secureStorage';
+import apiClient from '../../services/api';
+import logger from '../../utils/logger';
 
 export default function ScanScreen() {
   const [permission, requestPermission] = useCameraPermissions();

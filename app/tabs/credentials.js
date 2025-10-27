@@ -14,10 +14,11 @@ import {
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect } from '@react-navigation/native';
-import * as secureStorage from '../services/secureStorage';
-import { vcAPI } from '../services/api';
-import logger from '../utils/logger';
-import * as didManager from '../services/didManager';
+
+import * as secureStorage from '../../services/secureStorage';
+import { vcAPI } from '../../services/api';
+import logger from '../../utils/logger';
+import * as didManager from '../../services/didManager';
 
 const { width } = Dimensions.get('window');
 const CARD_WIDTH = width - 40;
