@@ -10,6 +10,7 @@ export default function OnboardingLayout() {
       <Stack.Screen name="biometric-setup" />
       <Stack.Screen name="pin-setup" />
       <Stack.Screen name="recovery-phrase-backup" />
+      <Stack.Screen name="recovery-phrase-verify" />
     </Stack>
   );
 }

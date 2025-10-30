@@ -4,7 +4,6 @@ import { View, Text, StyleSheet, Animated, Easing } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import { Shield } from 'lucide-react-native';
-import * as secureStorage from '../services/secureStorage';
 
 export default function SplashScreen() {
     const router = useRouter();
@@ -17,11 +16,15 @@ export default function SplashScreen() {
 
     useEffect(() => {
         startAnimations();
-        checkAuthStatus();
+        // Always go to Sign-In after splash, every reload
+        const timer = setTimeout(() => {
+            router.replace('/auth/sign-in');
+        }, 2500);
+
+        return () => clearTimeout(timer);
     }, []);
 
     const startAnimations = () => {
-        // Logo animation
         Animated.parallel([
             Animated.timing(logoScale, {
                 toValue: 1,
@@ -36,7 +39,6 @@ export default function SplashScreen() {
             }),
         ]).start();
 
-        // Name animation
         Animated.timing(nameOpacity, {
             toValue: 1,
             duration: 500,
@@ -44,7 +46,6 @@ export default function SplashScreen() {
             useNativeDriver: true,
         }).start();
 
-        // Tagline animation
         Animated.timing(taglineOpacity, {
             toValue: 1,
             duration: 500,
@@ -52,7 +53,6 @@ export default function SplashScreen() {
             useNativeDriver: true,
         }).start();
 
-        // Spinner animation
         Animated.timing(spinnerOpacity, {
             toValue: 1,
             duration: 300,
@@ -60,7 +60,6 @@ export default function SplashScreen() {
             useNativeDriver: true,
         }).start();
 
-        // Rotation animation
         Animated.loop(
             Animated.timing(rotateValue, {
                 toValue: 1,
@@ -69,24 +68,6 @@ export default function SplashScreen() {
                 useNativeDriver: true,
             })
         ).start();
-    };
-
-    const checkAuthStatus = async () => {
-        await new Promise(resolve => setTimeout(resolve, 2500));
-
-        try {
-            const hasWallet = await secureStorage.isWalletInitialized();
-            const onboardingCompleted = await secureStorage.isOnboardingCompleted();
-
-            if (hasWallet) {
-                router.replace('/tabs');
-            } else {
-                router.replace('/auth/sign-in');
-            }
-        } catch (error) {
-            console.error('Error checking auth status:', error);
-            router.replace('/auth/sign-in');
-        }
     };
 
     const rotation = rotateValue.interpolate({
@@ -139,62 +120,23 @@ export default function SplashScreen() {
 }
 
 const styles = StyleSheet.create({
-    container: {
-        flex: 1,
-    },
-    content: {
-        flex: 1,
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    logoContainer: {
-        marginBottom: 24,
-    },
+    container: { flex: 1 },
+    content: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+    logoContainer: { marginBottom: 24 },
     logoBackground: {
-        width: 120,
-        height: 120,
-        borderRadius: 30,
+        width: 120, height: 120, borderRadius: 30,
         backgroundColor: 'rgba(255, 255, 255, 0.1)',
-        justifyContent: 'center',
-        alignItems: 'center',
-        shadowColor: '#FFFFFF',
-        shadowOffset: { width: 0, height: 0 },
-        shadowOpacity: 0.3,
-        shadowRadius: 20,
-        elevation: 10,
+        justifyContent: 'center', alignItems: 'center',
+        shadowColor: '#FFFFFF', shadowOffset: { width: 0, height: 0 },
+        shadowOpacity: 0.3, shadowRadius: 20, elevation: 10,
     },
-    appName: {
-        fontSize: 28,
-        fontWeight: 'bold',
-        color: '#FFFFFF',
-        letterSpacing: 0.5,
-        marginBottom: 12,
-    },
-    tagline: {
-        fontSize: 16,
-        color: 'rgba(255, 255, 255, 0.7)',
-        letterSpacing: 0.3,
-    },
-    bottomContent: {
-        alignItems: 'center',
-        paddingBottom: 80,
-    },
-    spinnerContainer: {
-        width: 24,
-        height: 24,
-        marginBottom: 8,
-    },
+    appName: { fontSize: 28, fontWeight: 'bold', color: '#FFFFFF', letterSpacing: 0.5, marginBottom: 12 },
+    tagline: { fontSize: 16, color: 'rgba(255, 255, 255, 0.7)', letterSpacing: 0.3 },
+    bottomContent: { alignItems: 'center', paddingBottom: 80 },
+    spinnerContainer: { width: 24, height: 24, marginBottom: 8 },
     spinner: {
-        width: 24,
-        height: 24,
-        borderRadius: 12,
-        borderWidth: 3,
-        borderColor: 'rgba(255, 255, 255, 0.3)',
-        borderTopColor: '#FFFFFF',
+        width: 24, height: 24, borderRadius: 12, borderWidth: 3,
+        borderColor: 'rgba(255, 255, 255, 0.3)', borderTopColor: '#FFFFFF',
     },
-    version: {
-        fontSize: 12,
-        color: 'rgba(255, 255, 255, 0.5)',
-        marginTop: 8,
-    },
+    version: { fontSize: 12, color: 'rgba(255, 255, 255, 0.5)', marginTop: 8 },
 });

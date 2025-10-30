@@ -76,20 +76,20 @@ export default function RecoveryPhraseBackup() {
     try {
       logger.info('📝 Loading mnemonic...');
       const storedMnemonic = await secureStorage.getMnemonic();
-      
+
       if (!storedMnemonic) {
         throw new Error('No mnemonic found. Please create your wallet first.');
       }
 
       const words = storedMnemonic.trim().split(' ');
-      
+
       if (words.length !== 12) {
         throw new Error('Invalid mnemonic. Expected 12 words.');
       }
 
       setMnemonic(words);
       logger.success(`✅ Mnemonic loaded: ${words.length} words`);
-      
+
     } catch (error) {
       logger.error('Failed to load mnemonic: ' + error.message);
       Alert.alert(
@@ -113,16 +113,16 @@ export default function RecoveryPhraseBackup() {
 
   const handleCopyAll = async () => {
     if (mnemonic.length === 0) return;
-    
+
     const mnemonicString = mnemonic.join(' ');
     await Clipboard.setStringAsync(mnemonicString);
-    
+
     Alert.alert(
       '📋 Copied!',
       'Recovery phrase copied to clipboard.\n\n⚠️ Remember to:\n• Paste it in a secure location\n• Clear your clipboard afterwards\n• Never share it with anyone',
       [{ text: 'OK' }]
     );
-    
+
     logger.warning('⚠️ Mnemonic copied to clipboard');
   };
 
@@ -343,15 +343,25 @@ export default function RecoveryPhraseBackup() {
 
   const allChecked = checkboxes.every(c => c);
 
+  // const handleContinue = async () => {
+  //   if (!allChecked) {
+  //     Alert.alert('Confirmation Required', 'Please confirm all checkboxes before continuing.');
+  //     return;
+  //   }
+
+  //   await secureStorage.saveSecure('recovery_phrase_backed_up', 'true');
+  //   logger.success('✅ Recovery phrase backup confirmed');
+  //   router.replace('/onboarding/RecoveryPhraseVerify');
+  // };
+
   const handleContinue = async () => {
     if (!allChecked) {
       Alert.alert('Confirmation Required', 'Please confirm all checkboxes before continuing.');
       return;
     }
-
     await secureStorage.saveSecure('recovery_phrase_backed_up', 'true');
-    logger.success('✅ Recovery phrase backup confirmed');
-    router.replace('/tabs');
+    // FIX: Make sure we push to the onboarding route
+    router.push('/onboarding/recovery-phrase-verify');
   };
 
   if (isLoading) {
@@ -366,7 +376,7 @@ export default function RecoveryPhraseBackup() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
-      <ScrollView 
+      <ScrollView
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.scrollContent}
       >
@@ -464,7 +474,7 @@ export default function RecoveryPhraseBackup() {
           </View>
 
           {/* Print to PDF */}
-          <TouchableOpacity 
+          <TouchableOpacity
             style={styles.methodCard}
             onPress={handlePrint}
             disabled={isPrinting || !revealed}
@@ -486,7 +496,7 @@ export default function RecoveryPhraseBackup() {
           </TouchableOpacity>
 
           {/* Cloud Backup - Coming Soon */}
-          <TouchableOpacity 
+          <TouchableOpacity
             style={styles.methodCard}
             onPress={handleCloudBackup}
           >
@@ -587,7 +597,7 @@ export default function RecoveryPhraseBackup() {
 
 const styles = StyleSheet.create({
   // ... keep all existing styles and add these new ones:
-  
+
   container: {
     flex: 1,
     backgroundColor: '#0F172A',
