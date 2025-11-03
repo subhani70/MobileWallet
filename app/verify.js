@@ -22,7 +22,7 @@ import * as didManager from '../services/didManager';
 import logger from '../utils/logger';
 import * as vcService from '../services/vcService';
 
-const API_BASE_URL = 'http://172.16.10.117:5000';
+const API_BASE_URL = 'https://icbhyhmetd.execute-api.ap-south-1.amazonaws.com/';
 
 export default function VerifyScreen() {
   const [credentials, setCredentials] = useState([]);
