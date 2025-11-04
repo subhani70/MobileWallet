@@ -4,6 +4,7 @@ import { Stack, usePathname, useRouter } from 'expo-router';
 import { View, Text, ActivityIndicator, StyleSheet, StatusBar } from 'react-native';
 import * as secureStorage from '../services/secureStorage';
 import 'react-native-get-random-values';
+import { ThemeProvider } from '../contexts/ThemeContext';
 
 export default function RootLayout() {
   const router = useRouter();
@@ -66,25 +67,27 @@ export default function RootLayout() {
   }
 
   return (
-    <>
-      <StatusBar barStyle="light-content" backgroundColor="#0a0a0f" translucent={false} />
-      <Stack
-        screenOptions={{
-          headerShown: false,
-          animation: 'fade',
-          statusBarStyle: 'light',
-          statusBarColor: '#0a0a0f',
-        }}
-      >
-        <Stack.Screen name="index" options={{ headerShown: false, statusBarStyle: 'light' }} />
-        <Stack.Screen name="auth" options={{ headerShown: false, animation: 'fade', statusBarStyle: 'light' }} />
-        <Stack.Screen name="onboarding" options={{ headerShown: false, animation: 'slide_from_right', statusBarStyle: 'light' }} />
-        <Stack.Screen name="tabs" options={{ headerShown: false, animation: 'fade', statusBarStyle: 'light' }} />
-        <Stack.Screen name="issue" options={{ presentation: 'modal', animation: 'slide_from_bottom', headerShown: false, statusBarStyle: 'light' }} />
-        <Stack.Screen name="verify" options={{ presentation: 'modal', animation: 'slide_from_bottom', headerShown: false, statusBarStyle: 'light' }} />
-        <Stack.Screen name="test" options={{ presentation: 'modal', animation: 'slide_from_bottom', headerShown: false, statusBarStyle: 'light' }} />
-      </Stack>
-    </>
+    <ThemeProvider>
+      <>
+        <StatusBar barStyle="light-content" backgroundColor="#0a0a0f" translucent={false} />
+        <Stack
+          screenOptions={{
+            headerShown: false,
+            animation: 'fade',
+            statusBarStyle: 'light',
+            statusBarColor: '#0a0a0f',
+          }}
+        >
+          <Stack.Screen name="index" options={{ headerShown: false, statusBarStyle: 'light' }} />
+          <Stack.Screen name="auth" options={{ headerShown: false, animation: 'fade', statusBarStyle: 'light' }} />
+          <Stack.Screen name="onboarding" options={{ headerShown: false, animation: 'slide_from_right', statusBarStyle: 'light' }} />
+          <Stack.Screen name="tabs" options={{ headerShown: false, animation: 'fade', statusBarStyle: 'light' }} />
+          <Stack.Screen name="issue" options={{ presentation: 'modal', animation: 'slide_from_bottom', headerShown: false, statusBarStyle: 'light' }} />
+          <Stack.Screen name="verify" options={{ presentation: 'modal', animation: 'slide_from_bottom', headerShown: false, statusBarStyle: 'light' }} />
+          <Stack.Screen name="test" options={{ presentation: 'modal', animation: 'slide_from_bottom', headerShown: false, statusBarStyle: 'light' }} />
+        </Stack>
+      </>
+    </ThemeProvider>
   );
 }
 
