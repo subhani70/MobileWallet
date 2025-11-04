@@ -23,6 +23,7 @@ import {
   FileText,
   Download,
   RefreshCw,
+  Share2,
 } from 'lucide-react-native';
 import * as secureStorage from '../../services/secureStorage';
 import logger from '../../utils/logger';
@@ -351,6 +352,18 @@ function CredentialCard({ credential, router, fadeAnim }) {
                 <Text style={styles.verifiedText}>Verified</Text>
               </View>
             )}
+            <TouchableOpacity
+              style={styles.shareButton}
+              onPress={(e) => {
+                e.stopPropagation();
+                router.push({
+                  pathname: '/share-credential',
+                  params: { credentialId: credential.rawCredential?.id || credential.id }
+                });
+              }}
+            >
+              <Share2 color="#06B6D4" size={18} />
+            </TouchableOpacity>
             <ChevronRight color="#9CA3AF" size={20} />
           </View>
         </Animated.View>
@@ -460,6 +473,10 @@ const styles = StyleSheet.create({
   credentialRight: {
     alignItems: 'flex-end',
     justifyContent: 'space-between',
+    gap: 8,
+  },
+  shareButton: {
+    padding: 4,
   },
   verifiedBadge: {
     flexDirection: 'row',

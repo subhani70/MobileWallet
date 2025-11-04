@@ -166,7 +166,12 @@ export default function CredentialDetailScreen() {
   };
 
   const handleShare = () => {
-    Alert.alert('Share Credential', 'Sharing feature coming soon!');
+    if (credential?.id) {
+      router.push({
+        pathname: '/share-credential',
+        params: { credentialId: credential.id }
+      });
+    }
   };
 
   if (isLoading || !credential || !formattedCredential) {
