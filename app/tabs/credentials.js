@@ -119,11 +119,32 @@ export default function CredentialsScreen() {
     }
   };
 
-  const formatCredentials = (creds) => {
-    if (!creds || !Array.isArray(creds)) return [];
-    
+  // Helper function to get consistent icon and color for same credential type
+  const getCredentialStyle = (credentialType, title) => {
     const colors = ['#3B82F6', '#8B5CF6', '#10B981', '#F59E0B', '#EC4899', '#06B6D4'];
     const logos = ['🎓', '📜', '🪪', '💼', '🏆', '📄'];
+    
+    // Use credentialType if available, otherwise use title
+    const identifier = (credentialType || title || 'default').toLowerCase().trim();
+    
+    // Simple hash function for consistent mapping
+    let hash = 0;
+    for (let i = 0; i < identifier.length; i++) {
+      hash = ((hash << 5) - hash) + identifier.charCodeAt(i);
+      hash = hash | 0; // Convert to 32-bit integer
+    }
+    
+    // Use absolute value and modulo to get index
+    const index = Math.abs(hash) % logos.length;
+    
+    return {
+      color: colors[index],
+      logo: logos[index]
+    };
+  };
+
+  const formatCredentials = (creds) => {
+    if (!creds || !Array.isArray(creds)) return [];
     
     return creds.map((cred, index) => {
       const data = cred.data || {};
@@ -142,6 +163,12 @@ export default function CredentialsScreen() {
         subtitle = String(data[firstKey] || '').slice(0, 30);
       }
       
+      // Get credentialType from data if available
+      const credentialType = data.credentialType || data.credential_type || data.type;
+      
+      // Get consistent icon and color based on credential type
+      const { color, logo } = getCredentialStyle(credentialType, title);
+      
       // Try to get institution from issuer
       if (cred.issuer) {
         institution = cred.issuer.length > 20 ? `${cred.issuer.slice(0, 20)}...` : cred.issuer;
@@ -159,8 +186,8 @@ export default function CredentialsScreen() {
         institution,
         date,
         verified: true,
-        color: colors[index % colors.length],
-        logo: logos[index % logos.length],
+        color,
+        logo,
         rawCredential: cred, // Keep reference for navigation
       };
     });
@@ -367,7 +394,9 @@ function CredentialCard({ credential, router, fadeAnim, onDelete }) {
           ]}
         >
           <View style={styles.institutionLogo}>
-            <Text style={styles.logoEmoji}>{credential.logo}</Text>
+            <Text style={styles.logoEmoji} adjustsFontSizeToFit={false}>
+              {credential.logo}
+            </Text>
           </View>
           <View style={styles.credentialInfo}>
             <Text style={styles.credentialTitle}>{credential.title}</Text>
@@ -486,9 +515,14 @@ const styles = StyleSheet.create({
     backgroundColor: '#334155',
     justifyContent: 'center',
     alignItems: 'center',
+    overflow: 'hidden',
+    flexShrink: 0,
   },
   logoEmoji: {
     fontSize: 28,
+    textAlign: 'center',
+    lineHeight: 28,
+    includeFontPadding: false,
   },
   credentialInfo: {
     flex: 1,
