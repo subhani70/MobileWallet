@@ -11,6 +11,7 @@ import {
   Animated,
   RefreshControl,
   StatusBar,
+  Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
@@ -24,6 +25,7 @@ import {
   Download,
   RefreshCw,
   Share2,
+  Trash2,
 } from 'lucide-react-native';
 import * as secureStorage from '../../services/secureStorage';
 import logger from '../../utils/logger';
@@ -179,6 +181,33 @@ export default function CredentialsScreen() {
     router.push('/tabs/scan');
   };
 
+  const handleDeleteCredential = async (credentialId, credentialTitle) => {
+    Alert.alert(
+      'Delete Credential',
+      `Are you sure you want to delete "${credentialTitle}"? This action cannot be undone.`,
+      [
+        {
+          text: 'Cancel',
+          style: 'cancel',
+        },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await secureStorage.deleteCredential(credentialId);
+              logger.info('Credential deleted successfully');
+              await loadCredentials();
+            } catch (error) {
+              logger.error('Failed to delete credential:', error);
+              Alert.alert('Error', 'Failed to delete credential. Please try again.');
+            }
+          },
+        },
+      ]
+    );
+  };
+
   const renderHeader = () => (
     <View style={styles.header}>
       <Animated.View 
@@ -289,6 +318,7 @@ export default function CredentialsScreen() {
                 credential={credential} 
                 router={router}
                 fadeAnim={fadeAnim}
+                onDelete={handleDeleteCredential}
               />
             ))}
           </View>
@@ -300,7 +330,7 @@ export default function CredentialsScreen() {
   );
 }
 
-function CredentialCard({ credential, router, fadeAnim }) {
+function CredentialCard({ credential, router, fadeAnim, onDelete }) {
   const scaleAnim = useRef(new Animated.Value(1)).current;
 
   const handlePressIn = () => {
@@ -352,18 +382,29 @@ function CredentialCard({ credential, router, fadeAnim }) {
                 <Text style={styles.verifiedText}>Verified</Text>
               </View>
             )}
-            <TouchableOpacity
-              style={styles.shareButton}
-              onPress={(e) => {
-                e.stopPropagation();
-                router.push({
-                  pathname: '/share-credential',
-                  params: { credentialId: credential.rawCredential?.id || credential.id }
-                });
-              }}
-            >
-              <Share2 color="#06B6D4" size={18} />
-            </TouchableOpacity>
+            <View style={styles.actionButtons}>
+              <TouchableOpacity
+                style={styles.actionButton}
+                onPress={(e) => {
+                  e.stopPropagation();
+                  onDelete(credential.rawCredential?.id || credential.id, credential.title);
+                }}
+              >
+                <Trash2 color="#EF4444" size={18} />
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.actionButton}
+                onPress={(e) => {
+                  e.stopPropagation();
+                  router.push({
+                    pathname: '/share-credential',
+                    params: { credentialId: credential.rawCredential?.id || credential.id }
+                  });
+                }}
+              >
+                <Share2 color="#06B6D4" size={18} />
+              </TouchableOpacity>
+            </View>
             <ChevronRight color="#9CA3AF" size={20} />
           </View>
         </Animated.View>
@@ -474,6 +515,13 @@ const styles = StyleSheet.create({
     alignItems: 'flex-end',
     justifyContent: 'space-between',
     gap: 8,
+  },
+  actionButtons: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  actionButton: {
+    padding: 4,
   },
   shareButton: {
     padding: 4,

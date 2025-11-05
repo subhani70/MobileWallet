@@ -76,47 +76,105 @@ export default function ScanScreen() {
     try {
       logger.info('📷 QR Code scanned');
 
-      // Check if wallet exists FIRST
+      // ✅ CHECK 1: Wallet exists
       if (!walletInfo?.did) {
         throw new Error('No DID found. Please create your identity first.\n\nGo to Home screen → Click "Create Your Identity"');
       }
 
-      // Check if DID is registered on blockchain
-      const holderAddress = walletInfo.did.split(':').pop();
+      // ✅ CHECK 2: Extract and validate holder DID format
+      let holderAddress;
+      try {
+        holderAddress = walletInfo.did.split(':').pop();
+        if (!holderAddress || holderAddress.length < 40) {
+          throw new Error('Invalid DID format');
+        }
+      } catch (error) {
+        throw new Error('Your DID has an invalid format. Please recreate your identity.');
+      }
 
-      logger.info('🔍 Checking DID registration on blockchain...');
-
+      // ✅ CHECK 3: Holder DID registered on blockchain
+      logger.info('🔍 Checking holder DID registration on blockchain...');
       const registrationCheck = await apiClient.get(`/check-registration/${holderAddress}`);
 
       if (!registrationCheck.data.registered) {
         throw new Error('Your DID is not registered on blockchain yet.\n\nPlease wait a moment for blockchain confirmation, or try creating your identity again.');
       }
 
-      logger.info('✅ DID is registered on blockchain');
+      logger.info('✅ Holder DID is registered on blockchain');
 
-      // Parse claim token
-      const claimToken = JSON.parse(data);
+      // ✅ CHECK 4: Parse and validate claim token structure
+      let claimToken;
+      try {
+        claimToken = JSON.parse(data);
+      } catch (error) {
+        throw new Error('Invalid QR code format. This is not a valid credential claim token.');
+      }
+
+      // ✅ CHECK 5: Required fields in claim token
+      if (!claimToken || !claimToken.id || !claimToken.type) {
+        throw new Error('Invalid claim token. Missing required fields.');
+      }
 
       logger.info('📋 Claim token received');
       logger.info(`   Type: ${claimToken.type}`);
       logger.info(`   Token ID: ${claimToken.id}`);
 
-      // Validate claim token type
+      // ✅ CHECK 6: Validate claim token type
       if (claimToken.type !== 'CREDENTIAL_CLAIM') {
         throw new Error('Invalid QR code. This is not a credential claim token.');
       }
 
-      // Check expiration (client-side for UX)
+      // ✅ CHECK 7: Check expiration (client-side for UX)
+      if (!claimToken.expiresAt) {
+        throw new Error('Invalid claim token. Missing expiration information.');
+      }
+
       if (Date.now() > claimToken.expiresAt) {
         throw new Error('This claim token has expired. Please request a new one from the issuer.');
       }
 
-      // Verify DID if pre-registered (optional client-side check)
+      // ✅ CHECK 8: Check if already claimed locally (by claimTokenId)
+      const existingCredentials = await secureStorage.getCredentials();
+      const alreadyClaimed = existingCredentials.some(
+        cred => cred.claimTokenId === claimToken.id
+      );
+
+      if (alreadyClaimed) {
+        throw new Error('You have already claimed this credential using this token.');
+      }
+
+      // ✅ CHECK 9: Verify DID if pre-registered (optional client-side check)
       if (claimToken.requiredDID && claimToken.requiredDID !== walletInfo.did) {
         throw new Error(`This credential is issued for a different student.\n\nExpected: ${claimToken.requiredDID}\n\nYour DID: ${walletInfo.did}`);
       }
 
-      // Claim credential from backend
+      // ✅ CHECK 10: Validate issuer DID format if present
+      if (claimToken.issuer) {
+        try {
+          const issuerAddress = claimToken.issuer.split(':').pop();
+          if (!issuerAddress || issuerAddress.length < 40) {
+            throw new Error('Invalid issuer DID format in claim token.');
+          }
+
+          logger.info('🔍 Checking issuer DID registration on blockchain...');
+          const issuerRegistrationCheck = await apiClient.get(`/check-registration/${issuerAddress}`);
+
+          if (!issuerRegistrationCheck.data.registered) {
+            throw new Error('The issuer DID from the claim token is not registered on the blockchain. The credential cannot be issued.');
+          }
+
+          logger.info('✅ Issuer DID is registered on blockchain');
+        } catch (error) {
+          if (error.message.includes('issuer DID')) {
+            throw error;
+          }
+          throw new Error('Invalid issuer DID format in claim token.');
+        }
+      } else {
+        logger.warning('⚠️ No issuer DID found in claim token');
+      }
+
+      // ✅ ALL CHECKS PASSED - Claim credential from backend
       logger.info('📤 Claiming credential from issuer...');
       logger.info(`   Your DID: ${walletInfo.did}`);
 
@@ -125,8 +183,40 @@ export default function ScanScreen() {
         holderDID: walletInfo.did
       });
 
+      // Handle backend response errors
       if (!response.data.success) {
-        throw new Error(response.data.error || 'Failed to claim credential');
+        const errorCode = response.data.code;
+        const errorMessage = response.data.message || response.data.error;
+
+        // Map backend error codes to user-friendly messages
+        switch (errorCode) {
+          case 'MISSING_REQUIRED_FIELDS':
+            throw new Error('Missing required information. Please try scanning again.');
+          case 'CREDENTIAL_ALREADY_CLAIMED':
+            throw new Error('You have already claimed this credential.');
+          case 'INVALID_HOLDER_DID_FORMAT':
+            throw new Error('Your DID has an invalid format. Please recreate your identity.');
+          case 'HOLDER_DID_NOT_REGISTERED':
+            throw new Error('Your DID is not registered on blockchain. Please create your identity first.');
+          case 'INVALID_OR_USED_TOKEN':
+            throw new Error('The claim token is invalid or has already been used.');
+          case 'TOKEN_EXPIRED':
+            throw new Error('The claim token has expired. Please request a new one.');
+          case 'TOKEN_VALIDATION_FAILED':
+            throw new Error('Token validation failed. The token may have been tampered with.');
+          case 'DID_MISMATCH':
+            throw new Error('This credential is intended for a different DID.');
+          case 'MISSING_ISSUER_DID':
+            throw new Error('The claim token is missing issuer information. Please contact the credential issuer.');
+          case 'INVALID_ISSUER_DID_FORMAT':
+            throw new Error('The issuer DID in the claim token has an invalid format.');
+          case 'ISSUER_DID_NOT_REGISTERED':
+            throw new Error('The issuer DID from the claim token is not registered on the blockchain. The credential cannot be issued.');
+          case 'CREDENTIAL_CREATION_FAILED':
+            throw new Error('Failed to create the credential. Please try again or contact support.');
+          default:
+            throw new Error(errorMessage || 'Failed to claim credential. Please try again.');
+        }
       }
 
       // Store credential locally
@@ -146,7 +236,7 @@ export default function ScanScreen() {
 
       Alert.alert(
         '✅ Credential Claimed!',
-        `${claimToken.credentialData.credentialType} has been added to your wallet.\n\n🔐 Securely verified and issued.\n\nGo to the Wallet tab to view it.`,
+        `${claimToken.credentialData?.credentialType || 'Credential'} has been added to your wallet.\n\n🔐 Securely verified and issued.\n\nGo to the Wallet tab to view it.`,
         [
           {
             text: 'View Wallet',
@@ -166,39 +256,98 @@ export default function ScanScreen() {
     } catch (error) {
       logger.error('Failed to claim credential: ' + error.message);
 
-      let errorTitle = '❌ Claim Failed';
-      let errorMessage = error.message;
+      // Handle network errors
+      if (error.response) {
+        const status = error.response.status;
+        const errorData = error.response.data;
 
-      // User-friendly error messages
-      if (error.message.includes('No DID found')) {
-        errorTitle = '🆔 Identity Required';
-        errorMessage = 'You need to create your identity first.\n\nGo to Home screen and click "Create Your Identity"';
-      } else if (error.message.includes('not registered on blockchain')) {
-        errorTitle = '⏳ Registration Pending';
-        errorMessage = 'Your DID is being registered on blockchain.\n\nPlease wait a moment and try again.\n\nIf this persists, try creating your identity again.';
-      } else if (error.message.includes('expired')) {
-        errorTitle = '⏰ Token Expired';
-        errorMessage = 'This claim link has expired. Please request a new one from your institution.';
-      } else if (error.message.includes('already used')) {
-        errorTitle = '🔒 Already Claimed';
-        errorMessage = 'This credential has already been claimed and cannot be used again.';
-      } else if (error.message.includes('different student')) {
-        errorTitle = '🚫 Not For You';
-        errorMessage = error.message;
-      }
+        let errorTitle = '❌ Claim Failed';
+        let errorMessage = errorData?.message || errorData?.error || 'Failed to claim credential';
 
-      Alert.alert(
-        errorTitle,
-        errorMessage,
-        [
-          {
-            text: 'OK',
-            onPress: () => {
-              resetScanState();
-            }
+        // Map HTTP status codes and error codes
+        if (status === 400) {
+          errorTitle = '⚠️ Validation Error';
+          if (errorData?.code === 'TOKEN_EXPIRED') {
+            errorTitle = '⏰ Token Expired';
+            errorMessage = 'The claim token has expired. Please request a new one from the issuer.';
+          } else if (errorData?.code === 'INVALID_OR_USED_TOKEN') {
+            errorTitle = '🔒 Invalid Token';
+            errorMessage = 'The claim token is invalid or has already been used.';
+          } else if (errorData?.code === 'TOKEN_VALIDATION_FAILED') {
+            errorTitle = '🔐 Validation Failed';
+            errorMessage = 'Token validation failed. The token may have been tampered with.';
           }
-        ]
-      );
+        } else if (status === 403) {
+          errorTitle = '🚫 Access Denied';
+          if (errorData?.code === 'HOLDER_DID_NOT_REGISTERED') {
+            errorTitle = '⏳ Registration Required';
+            errorMessage = 'Your DID is not registered on blockchain. Please create your identity first.';
+          } else if (errorData?.code === 'DID_MISMATCH') {
+            errorTitle = '🚫 Not For You';
+            errorMessage = 'This credential is intended for a different DID.';
+          }
+        } else if (status === 409) {
+          errorTitle = '🔒 Already Claimed';
+          errorMessage = 'You have already claimed this credential.';
+        } else if (status === 500) {
+          errorTitle = '⚠️ Server Error';
+          errorMessage = 'An error occurred on the server. Please try again later or contact support.';
+        }
+
+        Alert.alert(
+          errorTitle,
+          errorMessage,
+          [
+            {
+              text: 'OK',
+              onPress: () => {
+                resetScanState();
+              }
+            }
+          ]
+        );
+      } else {
+        // Handle other errors (network, parsing, etc.)
+        let errorTitle = '❌ Claim Failed';
+        let errorMessage = error.message;
+
+        // User-friendly error messages for common errors
+        if (error.message.includes('No DID found') || error.message.includes('create your identity')) {
+          errorTitle = '🆔 Identity Required';
+          errorMessage = 'You need to create your identity first.\n\nGo to Home screen and click "Create Your Identity"';
+        } else if (error.message.includes('not registered on blockchain')) {
+          errorTitle = '⏳ Registration Pending';
+          errorMessage = 'Your DID is being registered on blockchain.\n\nPlease wait a moment and try again.\n\nIf this persists, try creating your identity again.';
+        } else if (error.message.includes('expired')) {
+          errorTitle = '⏰ Token Expired';
+          errorMessage = 'This claim link has expired. Please request a new one from your institution.';
+        } else if (error.message.includes('already claimed') || error.message.includes('already used')) {
+          errorTitle = '🔒 Already Claimed';
+          errorMessage = 'This credential has already been claimed and cannot be used again.';
+        } else if (error.message.includes('different student') || error.message.includes('different DID')) {
+          errorTitle = '🚫 Not For You';
+          errorMessage = error.message;
+        } else if (error.message.includes('Invalid QR code') || error.message.includes('Invalid claim token')) {
+          errorTitle = '❌ Invalid QR Code';
+          errorMessage = error.message;
+        } else if (error.message.includes('network') || error.message.includes('Network')) {
+          errorTitle = '🌐 Network Error';
+          errorMessage = 'Unable to connect to the server. Please check your internet connection and try again.';
+        }
+
+        Alert.alert(
+          errorTitle,
+          errorMessage,
+          [
+            {
+              text: 'OK',
+              onPress: () => {
+                resetScanState();
+              }
+            }
+          ]
+        );
+      }
     }
   };
 

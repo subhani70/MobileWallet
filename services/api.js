@@ -28,22 +28,22 @@ apiClient.interceptors.request.use(
 );
 
 // Response interceptor - logs all responses and errors
-apiClient.interceptors.response.use(
-  (response) => {
-    logger.success(`📥 Response: ${response.config.url} - Status ${response.status}`);
-    return response;
-  },
-  (error) => {
-    if (error.response) {
-      logger.error(`❌ API Error: ${error.response.status} - ${error.response.data?.error || error.message}`);
-    } else if (error.request) {
-      logger.error('❌ Network Error: No response from server');
-    } else {
-      logger.error(`❌ Error: ${error.message}`);
-    }
-    return Promise.reject(error);
-  }
-);
+// apiClient.interceptors.response.use(
+//   (response) => {
+//     logger.success(`📥 Response: ${response.config.url} - Status ${response.status}`);
+//     return response;
+//   },
+//   (error) => {
+//     if (error.response) {
+//       logger.error(`❌ API Error: ${error.response.status} - ${error.response.data?.error || error.message}`);
+//     } else if (error.request) {
+//       logger.error('❌ Network Error: No response from server');
+//     } else {
+//       logger.error(`❌ Error: ${error.message}`);
+//     }
+//     return Promise.reject(error);
+//   }
+// );
 
 // ============================================
 // HEALTH CHECK API
