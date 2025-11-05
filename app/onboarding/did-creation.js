@@ -90,10 +90,13 @@ export default function DIDCreationScreen() {
             setCurrentStep(3);
             animateProgress(80);
 
-            if (result.registered) {
+            if (result.registered && !result.pending) {
                 logger.success('✅ DID registered on blockchain');
-            } else {
+            } else if (result.pending) {
                 logger.warning('⚠️ DID created locally but blockchain registration pending');
+                logger.info('💡 Transaction submitted. Registration will complete shortly.');
+            } else {
+                logger.warning('⚠️ DID created locally but blockchain registration status unknown');
             }
 
             await new Promise(resolve => setTimeout(resolve, STEPS[3].duration));
@@ -113,11 +116,23 @@ export default function DIDCreationScreen() {
         } catch (err) {
             logger.error('DID creation failed: ' + err.message);
             setError(true);
-            setErrorMessage(err.message || 'Unable to create digital identity');
+            
+            // Provide user-friendly error messages
+            let userMessage = err.message || 'Unable to create digital identity';
+            
+            if (err.message.includes('timeout') || err.message.includes('Timeout')) {
+                userMessage = 'The request took too long to complete. This can happen when the blockchain network is busy. Your DID may still have been created - please try again or check your DID status.';
+            } else if (err.message.includes('Network') || err.message.includes('network')) {
+                userMessage = 'Network connection error. Please check your internet connection and try again.';
+            } else if (err.message.includes('blockchain') || err.message.includes('Blockchain')) {
+                userMessage = 'Blockchain registration is taking longer than expected. Your DID may still be processing. Please wait a few minutes and try checking your DID status.';
+            }
+            
+            setErrorMessage(userMessage);
 
             Alert.alert(
                 'Creation Failed',
-                err.message || 'Unable to create your digital identity. Please try again.',
+                userMessage,
                 [
                     { text: 'Try Again', onPress: handleRetry },
                     { text: 'Continue Offline', onPress: () => router.replace('/tabs') }
@@ -259,7 +274,7 @@ export default function DIDCreationScreen() {
                                 <TechDetailRow label="Network:" value="Private Ethereum" />
                                 <TechDetailRow label="DID Method:" value="did:ethr" />
                                 <TechDetailRow label="Key Algorithm:" value="secp256k1" />
-                                <TechDetailRow label="Estimated time:" value="15-30 seconds" />
+                                <TechDetailRow label="Estimated time:" value="30-90 seconds" />
                             </View>
                         </CollapsibleCard>
 

@@ -27,23 +27,42 @@ apiClient.interceptors.request.use(
   }
 );
 
-// Response interceptor - logs all responses and errors
-// apiClient.interceptors.response.use(
-//   (response) => {
-//     logger.success(`📥 Response: ${response.config.url} - Status ${response.status}`);
-//     return response;
-//   },
-//   (error) => {
-//     if (error.response) {
-//       logger.error(`❌ API Error: ${error.response.status} - ${error.response.data?.error || error.message}`);
-//     } else if (error.request) {
-//       logger.error('❌ Network Error: No response from server');
-//     } else {
-//       logger.error(`❌ Error: ${error.message}`);
-//     }
-//     return Promise.reject(error);
-//   }
-// );
+// Response interceptor - logs all responses and errors with improved timeout handling
+apiClient.interceptors.response.use(
+  (response) => {
+    logger.success(`📥 Response: ${response.config.url} - Status ${response.status}`);
+    return response;
+  },
+  (error) => {
+    // Enhanced error handling for production
+    if (error.code === 'ECONNABORTED' || error.message.includes('timeout')) {
+      const errorMessage = 'Request timeout. The blockchain transaction is taking longer than expected. Please try again.';
+      logger.error(`⏱️ Timeout Error: ${error.config?.url || 'Unknown endpoint'}`);
+      const timeoutError = new Error(errorMessage);
+      timeoutError.isTimeout = true;
+      timeoutError.originalError = error;
+      return Promise.reject(timeoutError);
+    } else if (error.response) {
+      // Server responded with error status
+      logger.error(`❌ API Error: ${error.response.status} - ${error.response.data?.error || error.message}`);
+      const apiError = new Error(error.response.data?.error || error.response.data?.message || error.message);
+      apiError.status = error.response.status;
+      apiError.response = error.response;
+      return Promise.reject(apiError);
+    } else if (error.request) {
+      // Request was made but no response received
+      logger.error('❌ Network Error: No response from server');
+      const networkError = new Error('Network error. Please check your internet connection and try again.');
+      networkError.isNetworkError = true;
+      networkError.originalError = error;
+      return Promise.reject(networkError);
+    } else {
+      // Something else happened
+      logger.error(`❌ Error: ${error.message}`);
+      return Promise.reject(error);
+    }
+  }
+);
 
 // ============================================
 // HEALTH CHECK API

@@ -8,9 +8,12 @@ import logger from '../utils/logger';
 
 /**
  * Poll blockchain to wait for DID registration confirmation
+ * Increased attempts and delay for production reliability
  */
-const waitForRegistration = async (address, maxAttempts = 10, delayMs = 3000) => {
+const waitForRegistration = async (address, maxAttempts = 30, delayMs = 3000) => {
   logger.info('⏳ Waiting for blockchain confirmation...');
+  const totalWaitTime = (maxAttempts * delayMs) / 1000;
+  logger.info(`   Will check up to ${maxAttempts} times (max ${totalWaitTime}s)...`);
   
   for (let i = 0; i < maxAttempts; i++) {
     try {
@@ -21,19 +24,30 @@ const waitForRegistration = async (address, maxAttempts = 10, delayMs = 3000) =>
         return { success: true, blockNumber: response.data.blockNumber };
       }
       
-      logger.info(`   Attempt ${i + 1}/${maxAttempts} - Not confirmed yet, waiting...`);
+      const remainingAttempts = maxAttempts - (i + 1);
+      logger.info(`   Attempt ${i + 1}/${maxAttempts} - Not confirmed yet, waiting ${delayMs/1000}s... (${remainingAttempts} attempts remaining)`);
       await new Promise(resolve => setTimeout(resolve, delayMs));
       
     } catch (error) {
-      logger.error(`   Check attempt ${i + 1} failed: ${error.message}`);
+      // Don't fail immediately on timeout - continue polling
+      if (error.isTimeout || error.code === 'ECONNABORTED') {
+        logger.warn(`   Check attempt ${i + 1} timed out, continuing to poll...`);
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+      } else {
+        logger.error(`   Check attempt ${i + 1} failed: ${error.message}`);
+        // Continue polling unless it's a critical error
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+      }
     }
   }
   
+  logger.warn(`⚠️ Registration check completed but DID not confirmed after ${maxAttempts} attempts`);
   return { success: false };
 };
 
 /**
  * Register DID on blockchain via backend
+ * Enhanced error handling for timeout scenarios
  */
 const registerDIDOnBlockchain = async (did, publicKey, address, privateKey) => {
   try {
@@ -44,38 +58,66 @@ const registerDIDOnBlockchain = async (did, publicKey, address, privateKey) => {
     const signature = await signData(privateKey, message);
     
     logger.info('🔐 Signed proof of ownership');
-    logger.info('📤 Sending to backend...');
+    logger.info('📤 Sending to backend (this may take up to 90 seconds)...');
     
-    const response = await apiClient.post('/register-on-chain', {
-      did,
-      publicKey,
-      address,
-      signature,
-      message
-    });
+    let response;
+    try {
+      response = await apiClient.post('/register-on-chain', {
+        did,
+        publicKey,
+        address,
+        signature,
+        message
+      });
+    } catch (error) {
+      // Handle timeout errors specifically
+      if (error.isTimeout || error.code === 'ECONNABORTED' || error.message.includes('timeout')) {
+        throw new Error('Registration request timed out. The transaction may still be processing. Please wait a few minutes and check your DID status.');
+      }
+      throw error;
+    }
     
     if (!response.data.success) {
-      throw new Error('Backend registration failed');
+      throw new Error(response.data.error || 'Backend registration failed');
     }
     
     logger.success(`⛓️ Transaction submitted!`);
     logger.success(`🔗 TX Hash: ${response.data.txHash}`);
+    logger.info('⏳ Waiting for blockchain confirmation (this may take 30-90 seconds)...');
     
-    // Wait for blockchain confirmation
+    // Wait for blockchain confirmation with increased timeout tolerance
     const confirmation = await waitForRegistration(address);
     
     if (!confirmation.success) {
-      throw new Error('Blockchain confirmation timeout. DID registration may still be pending.');
+      // Don't throw error - transaction may still be pending
+      logger.warn('⚠️ Registration confirmation timeout. Transaction may still be pending on blockchain.');
+      logger.info('💡 You can check registration status later using the check registration feature.');
+      // Return partial success - transaction was submitted
+      return {
+        success: true,
+        txHash: response.data.txHash,
+        blockNumber: null,
+        pending: true
+      };
     }
     
     return {
       success: true,
       txHash: response.data.txHash,
-      blockNumber: confirmation.blockNumber
+      blockNumber: confirmation.blockNumber,
+      pending: false
     };
     
   } catch (error) {
     logger.error('Blockchain registration failed: ' + error.message);
+    
+    // Provide more user-friendly error messages
+    if (error.isTimeout || error.message.includes('timeout')) {
+      throw new Error('The blockchain registration request timed out. This can happen if the network is slow. Please try again.');
+    } else if (error.isNetworkError || error.message.includes('Network')) {
+      throw new Error('Network error occurred. Please check your internet connection and try again.');
+    }
+    
     throw error;
   }
 };
@@ -135,7 +177,7 @@ export const createLocalDID = async () => {
     
     logger.success('✅ Wallet saved securely');
     
-    // Step 6: Register on blockchain (MUST SUCCEED)
+    // Step 6: Register on blockchain
     logger.info('⛓️ Registering on blockchain...');
     const registrationResult = await registerDIDOnBlockchain(
       walletData.did,
@@ -145,19 +187,27 @@ export const createLocalDID = async () => {
     );
     
     if (!registrationResult.success) {
-      throw new Error('Blockchain registration failed. Transaction was not confirmed.');
+      throw new Error('Blockchain registration failed. Transaction was not submitted.');
     }
     
-    logger.success('✅ DID fully registered and confirmed on blockchain!');
-    logger.success(`📦 Block: ${registrationResult.blockNumber}`);
-    logger.success(`🔗 TX Hash: ${registrationResult.txHash}`);
+    // Handle both confirmed and pending registrations
+    if (registrationResult.pending) {
+      logger.warn('⚠️ DID registration submitted but confirmation pending');
+      logger.info(`🔗 TX Hash: ${registrationResult.txHash}`);
+      logger.info('💡 Registration will complete shortly. You can check status later.');
+    } else {
+      logger.success('✅ DID fully registered and confirmed on blockchain!');
+      logger.success(`📦 Block: ${registrationResult.blockNumber}`);
+      logger.success(`🔗 TX Hash: ${registrationResult.txHash}`);
+    }
     
     return { 
       did: walletData.did, 
       address: walletData.address, 
       publicKey: walletData.publicKey,
       mnemonic: mnemonic, // Return mnemonic so user can back it up
-      registered: true,
+      registered: !registrationResult.pending, // true if confirmed, false if pending
+      pending: registrationResult.pending || false,
       txHash: registrationResult.txHash,
       blockNumber: registrationResult.blockNumber
     };

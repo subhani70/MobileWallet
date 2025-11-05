@@ -8,7 +8,7 @@ const API_CONFIG = {
   // BASE_URL: '',  // office
 
 
-  TIMEOUT: 10000,
+  TIMEOUT: 90000, // 90 seconds for blockchain transactions
   // BLOCKCHAIN_URL: 'http://192.168.1.6:8545',  // home
   // BLOCKCHAIN_URL: 'https://vymu2rbrb4.execute-api.ap-south-1.amazonaws.com/', // office
   BLOCKCHAIN_URL: 'http://172.16.10.1175:8545', // office
