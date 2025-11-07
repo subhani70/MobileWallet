@@ -1,6 +1,3 @@
-
-
-
 const API_CONFIG = {
   // BASE_URL: 'https://icbhyhmetd.execute-api.ap-south-1.amazonaws.com/',  // office
   BASE_URL: 'http://172.16.10.117:5000',  // office
