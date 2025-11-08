@@ -7,33 +7,49 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
-  Alert,
-  StatusBar,
-  ActivityIndicator
+  Modal,
+  Animated,
+  Platform,
 } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect } from '@react-navigation/native';
+import { useRouter } from 'expo-router';
+import * as Haptics from 'expo-haptics';
+import {
+  X,
+  Zap,
+  Image as ImageIcon,
+  Clock,
+  HelpCircle,
+  CheckCircle2,
+  XCircle,
+  Shield,
+  Building,
+  Calendar,
+  User,
+  Hash,
+  ChevronRight,
+  AlertTriangle,
+} from 'lucide-react-native';
 import * as didManager from '../../services/didManager';
 import * as secureStorage from '../../services/secureStorage';
 import apiClient from '../../services/api';
 import logger from '../../utils/logger';
 
-// ✅ FIX 1: Add request timeout wrapper
 const withTimeout = (promise, timeoutMs = 10000) => {
   return Promise.race([
     promise,
     new Promise((_, reject) =>
       setTimeout(() => reject(new Error('Request timeout')), timeoutMs)
-    )
+    ),
   ]);
 };
 
-// ✅ FIX 2: Registration cache (in-memory, session-based)
 const registrationCache = new Map();
-const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+const CACHE_TTL = 5 * 60 * 1000;
 
-const getCachedRegistration = (did) => {
+const getCachedRegistration = did => {
   const cached = registrationCache.get(did);
   if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
     return cached.registered;
@@ -44,41 +60,62 @@ const getCachedRegistration = (did) => {
 const setCachedRegistration = (did, registered) => {
   registrationCache.set(did, {
     registered,
-    timestamp: Date.now()
+    timestamp: Date.now(),
   });
 };
 
 export default function ScanScreen() {
+  const router = useRouter();
   const [permission, requestPermission] = useCameraPermissions();
   const [scanned, setScanned] = useState(false);
   const [processing, setProcessing] = useState(false);
-  const [processingStep, setProcessingStep] = useState(''); // ✅ FIX 3: Progressive feedback
+  const [processingStep, setProcessingStep] = useState('');
   const [walletInfo, setWalletInfo] = useState(null);
   const [isCameraReady, setIsCameraReady] = useState(false);
   const [isScreenFocused, setIsScreenFocused] = useState(false);
-  const abortControllerRef = useRef(null); // ✅ FIX 4: Cancellation support
+  const [flashEnabled, setFlashEnabled] = useState(false);
+  const [verificationResult, setVerificationResult] = useState(null);
+  const [showHelp, setShowHelp] = useState(false);
+  const [currentTip, setCurrentTip] = useState(0);
+  const abortControllerRef = useRef(null);
+
+  const tips = [
+    'Hold steady for best results',
+    'Ensure good lighting',
+    'QR code should fill most of frame',
+    'Keep camera parallel to code',
+  ];
 
   useFocusEffect(
     useCallback(() => {
-      console.log('📷 Scan screen focused');
       setIsScreenFocused(true);
       setScanned(false);
       setProcessing(false);
       setProcessingStep('');
       setIsCameraReady(false);
+      setVerificationResult(null);
+      setShowHelp(false);
+      setFlashEnabled(false);
+      setCurrentTip(0);
       loadWallet();
 
       return () => {
-        console.log('📷 Scan screen unfocused');
         setIsScreenFocused(false);
         setIsCameraReady(false);
-        // Cancel any pending requests
         if (abortControllerRef.current) {
           abortControllerRef.current.abort();
         }
       };
     }, [])
   );
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setCurrentTip(prev => (prev + 1) % tips.length);
+    }, 5000);
+
+    return () => clearInterval(interval);
+  }, []);
 
   const loadWallet = async () => {
     try {
@@ -87,12 +124,9 @@ export default function ScanScreen() {
         const info = await didManager.getWalletInfo();
         setWalletInfo(info);
 
-        // ✅ FIX 5: Pre-cache wallet DID registration on load
         if (info?.did) {
           const holderAddress = info.did.split(':').pop();
-          checkRegistrationWithCache(holderAddress).catch(() => {
-            // Silent pre-cache, don't block UI
-          });
+          checkRegistrationWithCache(holderAddress).catch(() => {});
         }
       } else {
         setWalletInfo(null);
@@ -103,20 +137,17 @@ export default function ScanScreen() {
     }
   };
 
-  // ✅ FIX 6: Cached registration check
-  const checkRegistrationWithCache = async (address) => {
-    // Check cache first
+  const checkRegistrationWithCache = async address => {
     const cached = getCachedRegistration(address);
     if (cached !== null) {
       logger.info(`📦 Using cached registration status for ${address}: ${cached}`);
       return cached;
     }
 
-    // Make API call with timeout
     try {
       const response = await withTimeout(
         apiClient.get(`/check-registration/${address}`),
-        5000 // 5 second timeout for registration checks
+        5000
       );
 
       const registered = response.data.registered;
@@ -131,7 +162,6 @@ export default function ScanScreen() {
   };
 
   const handleCameraReady = () => {
-    console.log('📷 Camera ready');
     setIsCameraReady(true);
   };
 
@@ -141,21 +171,25 @@ export default function ScanScreen() {
     setScanned(true);
     setProcessing(true);
     setProcessingStep('Validating...');
+    setVerificationResult(null);
 
-    // Create abort controller for cancellation
+    logger.info('🔄 Starting credential verification pipeline');
+
+    if (Platform.OS !== 'web') {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+    }
+
     abortControllerRef.current = new AbortController();
 
     try {
       logger.info('📷 QR Code scanned');
 
-      // ✅ LOCAL VALIDATIONS FIRST (no network calls)
-
-      // CHECK 1: Wallet exists
       if (!walletInfo?.did) {
-        throw new Error('No DID found. Please create your identity first.\n\nGo to Home screen → Click "Create Your Identity"');
+        throw new Error(
+          'No DID found. Please create your identity first.\n\nGo to Home screen → Click "Create Your Identity"'
+        );
       }
 
-      // CHECK 2: Extract and validate holder DID format
       let holderAddress;
       try {
         holderAddress = walletInfo.did.split(':').pop();
@@ -166,7 +200,6 @@ export default function ScanScreen() {
         throw new Error('Your DID has an invalid format. Please recreate your identity.');
       }
 
-      // CHECK 3: Parse and validate claim token structure
       let claimToken;
       try {
         claimToken = JSON.parse(data);
@@ -174,21 +207,19 @@ export default function ScanScreen() {
         throw new Error('Invalid QR code format. This is not a valid credential claim token.');
       }
 
-      // CHECK 4: Required fields in claim token
       if (!claimToken || !claimToken.id || !claimToken.type) {
         throw new Error('Invalid claim token. Missing required fields.');
       }
 
+      logger.info('✅ Local QR data validated');
       logger.info('📋 Claim token received');
       logger.info(`   Type: ${claimToken.type}`);
       logger.info(`   Token ID: ${claimToken.id}`);
 
-      // CHECK 5: Validate claim token type
       if (claimToken.type !== 'CREDENTIAL_CLAIM') {
         throw new Error('Invalid QR code. This is not a credential claim token.');
       }
 
-      // CHECK 6: Check expiration
       if (!claimToken.expiresAt) {
         throw new Error('Invalid claim token. Missing expiration information.');
       }
@@ -197,7 +228,6 @@ export default function ScanScreen() {
         throw new Error('This claim token has expired. Please request a new one from the issuer.');
       }
 
-      // CHECK 7: Check if already claimed locally
       const existingCredentials = await secureStorage.getCredentials();
       const alreadyClaimed = existingCredentials.some(
         cred => cred.claimTokenId === claimToken.id
@@ -207,24 +237,22 @@ export default function ScanScreen() {
         throw new Error('You have already claimed this credential using this token.');
       }
 
-      // CHECK 8: Verify DID if pre-registered
       if (claimToken.requiredDID && claimToken.requiredDID !== walletInfo.did) {
-        throw new Error(`This credential is issued for a different student.\n\nExpected: ${claimToken.requiredDID}\n\nYour DID: ${walletInfo.did}`);
+        throw new Error(
+          `This credential is issued for a different student.\n\nExpected: ${claimToken.requiredDID}\n\nYour DID: ${walletInfo.did}`
+        );
       }
 
-      // ✅ FIX 7: PARALLEL BLOCKCHAIN CHECKS (when both needed)
       setProcessingStep('Checking registrations...');
+      logger.info('🔗 Initiating blockchain registration checks');
 
       const registrationChecks = [];
-
-      // Add holder check
       registrationChecks.push(
         checkRegistrationWithCache(holderAddress)
           .then(registered => ({ type: 'holder', registered }))
           .catch(error => ({ type: 'holder', error }))
       );
 
-      // Add issuer check if present
       if (claimToken.issuer) {
         try {
           const issuerAddress = claimToken.issuer.split(':').pop();
@@ -240,52 +268,51 @@ export default function ScanScreen() {
         }
       }
 
-      // Execute checks in parallel
       const results = await Promise.all(registrationChecks);
 
-      // Process results
       for (const result of results) {
         if (result.error) {
           if (result.type === 'holder') {
-            throw new Error('Failed to verify your DID registration. Please check your connection and try again.');
+            throw new Error(
+              'Failed to verify your DID registration. Please check your connection and try again.'
+            );
           }
-          // Issuer check failures are warnings, not blocking
           logger.warning(`⚠️ Failed to verify issuer registration: ${result.error.message}`);
         } else if (result.type === 'holder' && !result.registered) {
-          throw new Error('Your DID is not registered on blockchain yet.\n\nPlease wait a moment for blockchain confirmation, or try creating your identity again.');
+          throw new Error(
+            'Your DID is not registered on blockchain yet.\n\nPlease wait a moment for blockchain confirmation, or try creating your identity again.'
+          );
         } else if (result.type === 'issuer' && !result.registered) {
-          // ✅ FIX 8: Make issuer check non-blocking (just warn)
           logger.warning('⚠️ Issuer DID not verified on blockchain, proceeding anyway');
         }
       }
 
-      // ✅ FIX 9: OPTIMIZED CLAIM REQUEST 
-      // Send all validation data to backend in one call
+      logger.info('🔗 Blockchain registration checks completed');
+
       setProcessingStep('Claiming credential...');
 
       logger.info('📤 Claiming credential from issuer...');
       logger.info(`   Your DID: ${walletInfo.did}`);
+      logger.info('🌐 Sending claim-credential request to backend');
 
       const response = await withTimeout(
         apiClient.post('/claim-credential', {
           claimToken: claimToken,
           holderDID: walletInfo.did,
-          // Send pre-validated data to avoid backend re-checks
           validationContext: {
             holderRegistered: true,
             locallyValidated: true,
-            clientVersion: '1.0.0'
-          }
+            clientVersion: '1.0.0',
+          },
         }),
-        15000 // 15 second timeout for claim
+        15000
       );
 
-      // Handle backend response
       if (!response.data.success) {
+        logger.warning('🌐 Claim API responded with failure status');
         const errorCode = response.data.code;
         const errorMessage = response.data.message || response.data.error;
 
-        // Map backend error codes to user-friendly messages
         switch (errorCode) {
           case 'MISSING_REQUIRED_FIELDS':
             throw new Error('Missing required information. Please try scanning again.');
@@ -294,7 +321,6 @@ export default function ScanScreen() {
           case 'INVALID_HOLDER_DID_FORMAT':
             throw new Error('Your DID has an invalid format. Please recreate your identity.');
           case 'HOLDER_DID_NOT_REGISTERED':
-            // Clear cache if backend says not registered
             registrationCache.delete(holderAddress);
             throw new Error('Your DID is not registered on blockchain. Please create your identity first.');
           case 'INVALID_OR_USED_TOKEN':
@@ -310,8 +336,10 @@ export default function ScanScreen() {
         }
       }
 
-      // Store credential locally
+      logger.info('🌐 Claim API response received successfully');
+
       setProcessingStep('Storing credential...');
+      logger.info('💾 Persisting credential locally');
 
       const credential = {
         id: response.data.credential.id,
@@ -320,34 +348,55 @@ export default function ScanScreen() {
         data: response.data.credential.data,
         jwt: response.data.credential.jwt,
         addedAt: new Date().toISOString(),
-        claimTokenId: claimToken.id
+        claimTokenId: claimToken.id,
       };
 
       await secureStorage.addCredential(credential);
 
       logger.success('✅ Credential claimed and stored securely');
 
-      Alert.alert(
-        '✅ Credential Claimed!',
-        `${claimToken.credentialData?.credentialType || 'Credential'} has been added to your wallet.\n\n🔐 Securely verified and issued.\n\nGo to the Wallet tab to view it.`,
-        [
-          {
-            text: 'View Wallet',
-            onPress: () => {
-              resetScanState();
-            }
-          },
-          {
-            text: 'Scan Another',
-            onPress: () => {
-              resetScanState();
-            }
-          }
-        ]
-      );
+      setProcessing(false);
+      setProcessingStep('');
 
+      const credentialData = response.data.credential?.data || {};
+      const credentialMeta = claimToken.credentialData || {};
+      const successResult = {
+        success: true,
+        name:
+          credentialData.name ||
+          credentialData.fullName ||
+          credentialData.studentName ||
+          walletInfo?.did?.split(':').pop(),
+        credential:
+          credentialData.credential ||
+          credentialData.title ||
+          credentialMeta.credentialType ||
+          'Verified Credential',
+        institution:
+          credentialData.institution ||
+          credentialData.issuer ||
+          credentialMeta.institution ||
+          credentialMeta.issuerName ||
+          response.data.credential?.issuer,
+        date:
+          credentialData.date ||
+          credentialData.graduationDate ||
+          (response.data.credential?.issuedAt
+            ? `Issued ${new Date(response.data.credential.issuedAt).toLocaleDateString()}`
+            : `Added ${new Date().toLocaleDateString()}`),
+        status: 'VERIFIED',
+        did: walletInfo?.did,
+        proofUrl: credentialMeta.proofUrl || null,
+      };
+
+      setVerificationResult(successResult);
+
+      if (Platform.OS !== 'web') {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+      }
+
+      logger.info('🏁 Credential verification pipeline completed successfully');
     } catch (error) {
-      // Check if cancelled
       if (error.name === 'AbortError') {
         logger.info('Claim operation cancelled');
         resetScanState();
@@ -356,59 +405,53 @@ export default function ScanScreen() {
 
       logger.error('Failed to claim credential: ' + error.message);
 
-      // Handle errors with appropriate alerts
-      let errorTitle = '❌ Claim Failed';
+      setProcessing(false);
+      setProcessingStep('');
+
+      let errorTitle = 'Claim Failed';
       let errorMessage = error.message;
 
-      // Special handling for timeout
       if (error.message === 'Request timeout') {
-        errorTitle = '⏱️ Request Timeout';
+        errorTitle = 'Request Timeout';
         errorMessage = 'The request took too long. The blockchain may be slow. Please try again.';
       } else if (error.message.includes('No DID found')) {
-        errorTitle = '🆔 Identity Required';
-        errorMessage = 'You need to create your identity first.\n\nGo to Home screen and click "Create Your Identity"';
+        errorTitle = 'Identity Required';
+        errorMessage = 'You need to create your identity first. Go to Home and tap "Create Your Identity".';
       } else if (error.message.includes('not registered on blockchain')) {
-        errorTitle = '⏳ Registration Pending';
-        errorMessage = error.message;
+        errorTitle = 'Registration Pending';
       } else if (error.message.includes('expired')) {
-        errorTitle = '⏰ Token Expired';
-        errorMessage = error.message;
+        errorTitle = 'Token Expired';
       } else if (error.message.includes('already claimed')) {
-        errorTitle = '🔒 Already Claimed';
-        errorMessage = error.message;
+        errorTitle = 'Already Claimed';
       } else if (error.message.includes('different')) {
-        errorTitle = '🚫 Not For You';
-        errorMessage = error.message;
+        errorTitle = 'DID Mismatch';
       } else if (error.message.includes('Invalid QR')) {
-        errorTitle = '❌ Invalid QR Code';
-        errorMessage = error.message;
+        errorTitle = 'Invalid QR Code';
       } else if (error.response) {
-        // Network error with response
         const status = error.response.status;
         if (status === 500) {
-          errorTitle = '⚠️ Server Error';
+          errorTitle = 'Server Error';
           errorMessage = 'An error occurred on the server. Please try again later.';
         } else if (status === 503) {
-          errorTitle = '🔧 Service Unavailable';
+          errorTitle = 'Service Unavailable';
           errorMessage = 'The service is temporarily unavailable. Please try again later.';
         }
-      } else if (error.message.includes('network') || error.message.includes('Network')) {
-        errorTitle = '🌐 Network Error';
+      } else if (error.message.toLowerCase().includes('network')) {
+        errorTitle = 'Network Error';
         errorMessage = 'Unable to connect to the server. Please check your internet connection.';
       }
 
-      Alert.alert(
+      setVerificationResult({
+        success: false,
+        error: errorMessage,
         errorTitle,
-        errorMessage,
-        [
-          {
-            text: 'OK',
-            onPress: () => {
-              resetScanState();
-            }
-          }
-        ]
-      );
+      });
+
+      logger.info('⚠️ Credential verification pipeline ended with an error state');
+
+      if (Platform.OS !== 'web') {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => {});
+      }
     } finally {
       abortControllerRef.current = null;
     }
@@ -418,9 +461,9 @@ export default function ScanScreen() {
     setScanned(false);
     setProcessing(false);
     setProcessingStep('');
+    setVerificationResult(null);
   };
 
-  // ✅ FIX 10: Add cancel button during processing
   const cancelProcessing = () => {
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
@@ -429,155 +472,485 @@ export default function ScanScreen() {
   };
 
   if (!permission) {
-    return (
-      <View style={styles.container}>
-        <ActivityIndicator size="large" color="#667eea" />
-      </View>
-    );
+    return <View style={styles.container} />;
   }
 
   if (!permission.granted) {
     return (
-      <View style={styles.container}>
-        <View style={styles.permissionContainer}>
-          <Text style={styles.permissionIcon}>📷</Text>
+      <View style={styles.permissionContainer}>
+        <View style={styles.permissionContent}>
+          <View style={styles.permissionIcon}>
+            <ImageIcon color="#94A3B8" size={64} />
+          </View>
           <Text style={styles.permissionTitle}>Camera Access Required</Text>
-          <Text style={styles.permissionText}>
-            We need camera permission to scan QR codes for receiving credentials
+          <Text style={styles.permissionMessage}>
+            Please allow camera access to scan QR codes
           </Text>
-          <TouchableOpacity style={styles.permissionButton} onPress={requestPermission}>
-            <LinearGradient
-              colors={['#667eea', '#764ba2']}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
-              style={styles.permissionButtonGradient}
-            >
-              <Text style={styles.permissionButtonText}>Grant Permission</Text>
-            </LinearGradient>
+          <TouchableOpacity
+            style={styles.enableButton}
+            onPress={requestPermission}
+          >
+            <Text style={styles.enableButtonText}>Enable Camera</Text>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => router.back()}>
+            <Text style={styles.backLink}>Go Back</Text>
           </TouchableOpacity>
         </View>
       </View>
     );
   }
 
+  const handleToggleFlash = () => {
+    setFlashEnabled(prev => !prev);
+  };
+
+  const handleShowHelp = () => {
+    setShowHelp(true);
+  };
+
+  const handleCloseHelp = () => {
+    setShowHelp(false);
+  };
+
+  const handleScanAgain = () => {
+    resetScanState();
+  };
+
+  const handleDone = () => {
+    setVerificationResult(null);
+    router.back();
+  };
+
   return (
     <View style={styles.container}>
-      <StatusBar barStyle="light-content" />
-
-      <View style={styles.header}>
-        <Text style={styles.headerTitle}>Scan QR Code</Text>
-        <Text style={styles.headerSubtitle}>
-          Point camera at credential QR code
-        </Text>
-
-        {/* DID Status Indicator */}
-        {walletInfo?.did ? (
-          <View style={styles.didStatusCard}>
-            <Text style={styles.didStatusIcon}>✅</Text>
-            <View style={styles.didStatusText}>
-              <Text style={styles.didStatusTitle}>Identity Ready</Text>
-              <Text style={styles.didStatusSubtitle}>
-                {walletInfo.did.slice(0, 30)}...
-              </Text>
-            </View>
-          </View>
-        ) : (
-          <View style={[styles.didStatusCard, styles.didStatusCardWarning]}>
-            <Text style={styles.didStatusIcon}>⚠️</Text>
-            <View style={styles.didStatusText}>
-              <Text style={styles.didStatusTitle}>No Identity Found</Text>
-              <Text style={styles.didStatusSubtitle}>
-                Create your identity first on Home screen
-              </Text>
-            </View>
-          </View>
-        )}
-      </View>
-
-      <View style={styles.cameraContainer}>
-        {isScreenFocused && permission.granted ? (
-          <CameraView
-            key={isScreenFocused ? 'focused' : 'unfocused'}
-            style={styles.camera}
-            facing="back"
-            onBarcodeScanned={scanned ? undefined : handleBarCodeScanned}
-            onCameraReady={handleCameraReady}
-            barcodeScannerSettings={{
-              barcodeTypes: ['qr'],
-            }}
-          >
-            <View style={styles.overlay}>
-              <View style={styles.scanArea}>
-                <View style={[styles.corner, styles.topLeft]} />
-                <View style={[styles.corner, styles.topRight]} />
-                <View style={[styles.corner, styles.bottomLeft]} />
-                <View style={[styles.corner, styles.bottomRight]} />
-              </View>
-            </View>
-          </CameraView>
-        ) : (
-          <View style={styles.cameraLoading}>
-            <ActivityIndicator size="large" color="#667eea" />
-            <Text style={styles.cameraLoadingText}>Loading camera...</Text>
-          </View>
-        )}
-
-        {processing && (
-          <View style={styles.processingOverlay}>
-            <ActivityIndicator size="large" color="#fff" />
-            <Text style={styles.processingText}>
-              {processingStep || 'Processing credential...'}
-            </Text>
-            {/* ✅ Cancel button */}
-            <TouchableOpacity
-              style={styles.cancelButton}
-              onPress={cancelProcessing}
-            >
-              <Text style={styles.cancelButtonText}>Cancel</Text>
-            </TouchableOpacity>
-          </View>
-        )}
-
-        {isScreenFocused && !isCameraReady && !processing && (
-          <View style={styles.cameraStatusOverlay}>
-            <ActivityIndicator size="small" color="#667eea" />
-            <Text style={styles.cameraStatusText}>Initializing camera...</Text>
-          </View>
-        )}
-      </View>
-
-      <View style={styles.instructions}>
-        <Text style={styles.instructionTitle}>📱 How to receive credentials</Text>
-        <Text style={styles.instructionText}>
-          1. Make sure you have created your identity{'\n'}
-          2. Ask the issuer to generate a QR code{'\n'}
-          3. Point your camera at the QR code{'\n'}
-          4. Credential will be automatically added to your wallet
-        </Text>
-
-        {/* ✅ Show cache status */}
-        {registrationCache.size > 0 && (
-          <Text style={styles.cacheStatus}>
-            ⚡ Fast mode: {registrationCache.size} cached registration{registrationCache.size > 1 ? 's' : ''}
-          </Text>
-        )}
-      </View>
-
-      {scanned && !processing && (
-        <TouchableOpacity
-          style={styles.resetButton}
-          onPress={resetScanState}
+      {isScreenFocused ? (
+        <CameraView
+          key={isScreenFocused ? 'focused' : 'unfocused'}
+          style={StyleSheet.absoluteFill}
+          facing="back"
+          onBarcodeScanned={scanned ? undefined : handleBarCodeScanned}
+          onCameraReady={handleCameraReady}
+          barcodeScannerSettings={{
+            barcodeTypes: ['qr'],
+          }}
+          enableTorch={flashEnabled}
         >
-          <LinearGradient
-            colors={['#667eea', '#764ba2']}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
-            style={styles.resetButtonGradient}
-          >
-            <Text style={styles.resetButtonText}>Scan Another</Text>
-          </LinearGradient>
-        </TouchableOpacity>
+          <View style={styles.overlay}>
+            <TopControls
+              flashEnabled={flashEnabled}
+              onToggleFlash={handleToggleFlash}
+              onClose={() => router.back()}
+            />
+
+            <ScanningArea
+              processing={processing}
+              processingStep={processingStep}
+              currentTip={tips[currentTip]}
+              isCameraReady={isCameraReady}
+            />
+
+            <BottomActions onHelp={handleShowHelp} />
+
+            {processing && (
+              <ProcessingOverlay
+                processingStep={processingStep}
+                onCancel={cancelProcessing}
+              />
+            )}
+          </View>
+        </CameraView>
+      ) : (
+        <View style={styles.inactiveCamera}>
+          <Text style={styles.inactiveCameraText}>Camera paused</Text>
+        </View>
       )}
+
+      {verificationResult && (
+        <VerificationResultModal
+          result={verificationResult}
+          onClose={verificationResult.success ? handleDone : () => setVerificationResult(null)}
+          onScanAgain={handleScanAgain}
+        />
+      )}
+
+      {showHelp && <HelpModal onClose={handleCloseHelp} />}
+    </View>
+  );
+}
+
+function TopControls({ flashEnabled, onToggleFlash, onClose }) {
+  return (
+    <LinearGradient
+      colors={['rgba(0,0,0,0.7)', 'transparent']}
+      style={styles.topControls}
+    >
+      <TouchableOpacity style={styles.controlButton} onPress={onClose}>
+        <X color="#FFFFFF" size={28} />
+      </TouchableOpacity>
+
+      <Text style={styles.title}>Scan QR Code</Text>
+
+      <TouchableOpacity style={styles.controlButton} onPress={onToggleFlash}>
+        <Zap
+          color={flashEnabled ? '#FFD700' : '#FFFFFF'}
+          size={28}
+          fill={flashEnabled ? '#FFD700' : 'transparent'}
+        />
+      </TouchableOpacity>
+    </LinearGradient>
+  );
+}
+
+function ScanningArea({ processing, processingStep, currentTip, isCameraReady }) {
+  const instructionPrimary = processing
+    ? processingStep || 'Processing credential...'
+    : isCameraReady
+      ? 'Position QR code within frame'
+      : 'Initializing camera...';
+
+  return (
+    <View style={styles.scanningArea}>
+      <View style={styles.viewfinderContainer}>
+        <View style={styles.viewfinder}>
+          <ScanningLine />
+          <CornerBrackets />
+        </View>
+      </View>
+
+      <View style={styles.instructionCard}>
+        <Shield color="#06B6D4" size={24} />
+        <View style={styles.instructionTextContainer}>
+          <Text style={styles.instructionPrimary}>{instructionPrimary}</Text>
+          <Text style={styles.instructionTip}>{currentTip}</Text>
+        </View>
+      </View>
+    </View>
+  );
+}
+
+function ScanningLine() {
+  const animatedValue = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(animatedValue, {
+          toValue: 1,
+          duration: 2000,
+          useNativeDriver: true,
+        }),
+        Animated.timing(animatedValue, {
+          toValue: 0,
+          duration: 0,
+          useNativeDriver: true,
+        }),
+      ])
+    ).start();
+  }, [animatedValue]);
+
+  const translateY = animatedValue.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0, 280],
+  });
+
+  return (
+    <Animated.View
+      style={[
+        styles.scanningLine,
+        {
+          transform: [{ translateY }],
+        },
+      ]}
+    />
+  );
+}
+
+function CornerBrackets() {
+  const pulseAnim = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulseAnim, {
+          toValue: 1.05,
+          duration: 1000,
+          useNativeDriver: true,
+        }),
+        Animated.timing(pulseAnim, {
+          toValue: 1,
+          duration: 1000,
+          useNativeDriver: true,
+        }),
+      ])
+    ).start();
+  }, [pulseAnim]);
+
+  return (
+    <>
+      <Animated.View
+        style={[
+          styles.cornerBracket,
+          styles.topLeft,
+          { transform: [{ scale: pulseAnim }] },
+        ]}
+      />
+      <Animated.View
+        style={[
+          styles.cornerBracket,
+          styles.topRight,
+          { transform: [{ scale: pulseAnim }] },
+        ]}
+      />
+      <Animated.View
+        style={[
+          styles.cornerBracket,
+          styles.bottomLeft,
+          { transform: [{ scale: pulseAnim }] },
+        ]}
+      />
+      <Animated.View
+        style={[
+          styles.cornerBracket,
+          styles.bottomRight,
+          { transform: [{ scale: pulseAnim }] },
+        ]}
+      />
+    </>
+  );
+}
+
+function BottomActions({ onHelp }) {
+  return (
+    <LinearGradient
+      colors={['transparent', 'rgba(0,0,0,0.7)']}
+      style={styles.bottomActions}
+    >
+      <TouchableOpacity style={styles.actionButton}>
+        <Clock color="#FFFFFF" size={24} />
+      </TouchableOpacity>
+
+      <View style={styles.galleryButtonContainer}>
+        <TouchableOpacity style={styles.galleryButton}>
+          <ImageIcon color="#FFFFFF" size={32} />
+        </TouchableOpacity>
+        <Text style={styles.galleryLabel}>Scan from Photos</Text>
+      </View>
+
+      <TouchableOpacity style={styles.actionButton} onPress={onHelp}>
+        <HelpCircle color="#FFFFFF" size={24} />
+      </TouchableOpacity>
+    </LinearGradient>
+  );
+}
+
+function ProcessingOverlay({ processingStep, onCancel }) {
+  const [step, setStep] = useState(0);
+  const steps = [
+    'Reading QR code...',
+    'Fetching credential...',
+    'Verifying signature...',
+    'Checking blockchain...',
+  ];
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setStep(prev => (prev < steps.length - 1 ? prev + 1 : prev));
+    }, 400);
+
+    return () => clearInterval(interval);
+  }, []);
+
+  return (
+    <View style={styles.processingOverlay}>
+      <View style={styles.processingContent}>
+        <View style={styles.processingSpinner}>
+          <View style={styles.spinner} />
+        </View>
+        <Text style={styles.processingText}>{processingStep || steps[step]}</Text>
+        <TouchableOpacity style={styles.cancelButton} onPress={onCancel}>
+          <Text style={styles.cancelButtonText}>Cancel</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+}
+
+function VerificationResultModal({
+  result,
+  onClose,
+  onScanAgain,
+}) {
+  const slideAnim = useRef(new Animated.Value(500)).current;
+
+  useEffect(() => {
+    Animated.spring(slideAnim, {
+      toValue: 0,
+      tension: 50,
+      friction: 8,
+      useNativeDriver: true,
+    }).start();
+  }, [slideAnim]);
+
+  const isSuccess = result.success;
+
+  return (
+    <Modal transparent animationType="fade">
+      <View style={styles.modalOverlay}>
+        <Animated.View
+          style={[
+            styles.resultCard,
+            {
+              transform: [{ translateY: slideAnim }],
+            },
+          ]}
+        >
+          <View style={styles.resultContent}>
+            {isSuccess ? (
+              <>
+                <View style={styles.successIcon}>
+                  <CheckCircle2 color="#10B981" size={64} />
+                </View>
+                <Text style={styles.resultTitle}>Credential Claimed ✓</Text>
+                {result.status && (
+                  <View style={styles.statusBadge}>
+                    <Text style={styles.statusBadgeText}>{result.status}</Text>
+                  </View>
+                )}
+
+                <View style={styles.credentialDetails}>
+                  {result.name && (
+                    <DetailRow icon={User} label="Name" value={result.name} />
+                  )}
+                  {result.credential && (
+                    <DetailRow icon={Shield} label="Credential" value={result.credential} />
+                  )}
+                  {result.institution && (
+                    <DetailRow icon={Building} label="Institution" value={result.institution} />
+                  )}
+                  {result.date && (
+                    <DetailRow icon={Calendar} label="Date" value={result.date} />
+                  )}
+                  {result.did && (
+                    <DetailRow icon={Hash} label="DID" value={result.did} />
+                  )}
+                </View>
+
+                {result.proofUrl ? (
+                  <TouchableOpacity style={styles.blockchainProof} onPress={() => {}}>
+                    <Text style={styles.blockchainProofText}>View Blockchain Proof</Text>
+                    <ChevronRight color="#06B6D4" size={20} />
+                  </TouchableOpacity>
+                ) : null}
+
+                <TouchableOpacity style={styles.primaryButton} onPress={onClose}>
+                  <Text style={styles.primaryButtonText}>Done</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity style={styles.secondaryButton} onPress={onScanAgain}>
+                  <Text style={styles.secondaryButtonText}>Scan Another</Text>
+                </TouchableOpacity>
+              </>
+            ) : (
+              <>
+                <View style={styles.failureIcon}>
+                  <XCircle color="#EF4444" size={64} />
+                </View>
+                <Text style={styles.resultTitleError}>{result.errorTitle || 'Verification Failed'}</Text>
+
+                <View style={styles.errorCard}>
+                  <AlertTriangle color="#EF4444" size={24} />
+                  <View style={styles.errorContent}>
+                    <Text style={styles.errorTitle}>{result.errorTitle || 'Verification Failed'}</Text>
+                    <Text style={styles.errorMessage}>
+                      {result.error || 'The credential could not be verified. Please try again.'}
+                    </Text>
+                  </View>
+                </View>
+
+                <TouchableOpacity style={styles.retryButton} onPress={onScanAgain}>
+                  <Text style={styles.retryButtonText}>Try Again</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity style={styles.reportButton}>
+                  <Text style={styles.reportButtonText}>Report Issue</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity onPress={onClose}>
+                  <Text style={styles.closeLink}>Close</Text>
+                </TouchableOpacity>
+              </>
+            )}
+          </View>
+        </Animated.View>
+      </View>
+    </Modal>
+  );
+}
+
+function DetailRow({ icon: Icon, label, value }) {
+  return (
+    <View style={styles.detailRow}>
+      <Icon color="#64748B" size={20} />
+      <View style={styles.detailContent}>
+        <Text style={styles.detailLabel}>{label}</Text>
+        <Text style={styles.detailValue}>{value}</Text>
+      </View>
+    </View>
+  );
+}
+
+function HelpModal({ onClose }) {
+  return (
+    <Modal animationType="slide" presentationStyle="pageSheet">
+      <View style={styles.helpModal}>
+        <View style={styles.helpHeader}>
+          <Text style={styles.helpTitle}>How to Scan</Text>
+          <TouchableOpacity onPress={onClose}>
+            <X color="#1E293B" size={28} />
+          </TouchableOpacity>
+        </View>
+
+        <View style={styles.helpContent}>
+          <HelpStep
+            number="1"
+            title="Position QR Code"
+            description="Center the QR code in the frame"
+          />
+          <HelpStep
+            number="2"
+            title="Hold Steady"
+            description="Keep your phone still for best results"
+          />
+          <HelpStep
+            number="3"
+            title="Good Lighting"
+            description="Ensure adequate lighting or use flash"
+          />
+          <HelpStep
+            number="4"
+            title="Wait for Verification"
+            description="Verification happens automatically"
+          />
+        </View>
+
+        <TouchableOpacity style={styles.gotItButton} onPress={onClose}>
+          <Text style={styles.gotItButtonText}>Got It</Text>
+        </TouchableOpacity>
+      </View>
+    </Modal>
+  );
+}
+
+function HelpStep({ number, title, description }) {
+  return (
+    <View style={styles.helpStep}>
+      <View style={styles.stepNumber}>
+        <Text style={styles.stepNumberText}>{number}</Text>
+      </View>
+      <View style={styles.stepContent}>
+        <Text style={styles.stepTitle}>{title}</Text>
+        <Text style={styles.stepDescription}>{description}</Text>
+      </View>
     </View>
   );
 }
@@ -585,241 +958,485 @@ export default function ScanScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#0a0a0f',
-  },
-  header: {
-    paddingHorizontal: 20,
-    paddingTop: 60,
-    paddingBottom: 20,
-  },
-  headerTitle: {
-    fontSize: 32,
-    fontWeight: 'bold',
-    color: '#fff',
-    marginBottom: 8,
-  },
-  headerSubtitle: {
-    fontSize: 16,
-    color: '#888',
-    marginBottom: 16,
-  },
-  didStatusCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#1a3a1a',
-    borderRadius: 12,
-    padding: 12,
-    borderWidth: 1,
-    borderColor: '#2a5a2a',
-  },
-  didStatusCardWarning: {
-    backgroundColor: '#3a2a1a',
-    borderColor: '#5a4a2a',
-  },
-  didStatusIcon: {
-    fontSize: 24,
-    marginRight: 12,
-  },
-  didStatusText: {
-    flex: 1,
-  },
-  didStatusTitle: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#fff',
-    marginBottom: 4,
-  },
-  didStatusSubtitle: {
-    fontSize: 12,
-    color: '#aaa',
-  },
-  cameraContainer: {
-    flex: 1,
-    margin: 20,
-    borderRadius: 20,
-    overflow: 'hidden',
-    backgroundColor: '#000',
-  },
-  camera: {
-    flex: 1,
-  },
-  cameraLoading: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: '#000',
-  },
-  cameraLoadingText: {
-    color: '#fff',
-    fontSize: 14,
-    marginTop: 12,
+    backgroundColor: '#000000',
   },
   overlay: {
     flex: 1,
-    backgroundColor: 'transparent',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  scanArea: {
-    width: 250,
-    height: 250,
-    position: 'relative',
-  },
-  corner: {
-    position: 'absolute',
-    width: 40,
-    height: 40,
-    borderColor: '#667eea',
-  },
-  topLeft: {
-    top: 0,
-    left: 0,
-    borderTopWidth: 4,
-    borderLeftWidth: 4,
-    borderTopLeftRadius: 10,
-  },
-  topRight: {
-    top: 0,
-    right: 0,
-    borderTopWidth: 4,
-    borderRightWidth: 4,
-    borderTopRightRadius: 10,
-  },
-  bottomLeft: {
-    bottom: 0,
-    left: 0,
-    borderBottomWidth: 4,
-    borderLeftWidth: 4,
-    borderBottomLeftRadius: 10,
-  },
-  bottomRight: {
-    bottom: 0,
-    right: 0,
-    borderBottomWidth: 4,
-    borderRightWidth: 4,
-    borderBottomRightRadius: 10,
-  },
-  processingOverlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: 'rgba(0, 0, 0, 0.8)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  processingText: {
-    color: '#fff',
-    fontSize: 16,
-    marginTop: 16,
-    fontWeight: '600',
-  },
-  cancelButton: {
-    marginTop: 20,
-    paddingVertical: 10,
-    paddingHorizontal: 30,
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.2)',
-  },
-  cancelButtonText: {
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  cameraStatusOverlay: {
-    position: 'absolute',
-    bottom: 20,
-    left: 0,
-    right: 0,
-    flexDirection: 'row',
-    justifyContent: 'center',
-    alignItems: 'center',
-    gap: 8,
-  },
-  cameraStatusText: {
-    color: '#667eea',
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  instructions: {
-    padding: 20,
-    backgroundColor: '#1a1a2e',
-    margin: 20,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: '#2a2a3e',
-  },
-  instructionTitle: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#fff',
-    marginBottom: 12,
-  },
-  instructionText: {
-    fontSize: 14,
-    color: '#aaa',
-    lineHeight: 22,
-  },
-  cacheStatus: {
-    fontSize: 12,
-    color: '#667eea',
-    marginTop: 12,
-    fontStyle: 'italic',
-  },
-  resetButton: {
-    marginHorizontal: 20,
-    marginBottom: 20,
-    borderRadius: 16,
-    overflow: 'hidden',
-  },
-  resetButtonGradient: {
-    padding: 18,
-    alignItems: 'center',
-  },
-  resetButtonText: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#fff',
+    backgroundColor: 'rgba(0,0,0,0.6)',
   },
   permissionContainer: {
     flex: 1,
+    backgroundColor: '#0F172A',
     justifyContent: 'center',
     alignItems: 'center',
-    padding: 40,
+  },
+  permissionContent: {
+    alignItems: 'center',
+    paddingHorizontal: 32,
   },
   permissionIcon: {
-    fontSize: 80,
-    marginBottom: 20,
+    marginBottom: 24,
   },
   permissionTitle: {
     fontSize: 24,
     fontWeight: 'bold',
-    color: '#fff',
+    color: '#F1F5F9',
     marginBottom: 12,
     textAlign: 'center',
   },
-  permissionText: {
+  permissionMessage: {
     fontSize: 16,
-    color: '#888',
+    color: '#94A3B8',
     textAlign: 'center',
-    marginBottom: 30,
+    marginBottom: 32,
     lineHeight: 24,
   },
-  permissionButton: {
-    width: '100%',
-    borderRadius: 16,
-    overflow: 'hidden',
+  enableButton: {
+    backgroundColor: '#06B6D4',
+    paddingHorizontal: 32,
+    paddingVertical: 16,
+    borderRadius: 12,
+    marginBottom: 16,
   },
-  permissionButtonGradient: {
-    padding: 18,
+  enableButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  backLink: {
+    color: '#06B6D4',
+    fontSize: 16,
+  },
+  topControls: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingTop: 60,
+    paddingHorizontal: 16,
+    paddingBottom: 20,
+  },
+  controlButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
     alignItems: 'center',
   },
-  permissionButtonText: {
+  title: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#FFFFFF',
+  },
+  scanningArea: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  viewfinderContainer: {
+    width: 280,
+    height: 280,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  viewfinder: {
+    width: 280,
+    height: 280,
+    borderWidth: 4,
+    borderColor: '#FFFFFF',
+    borderRadius: 24,
+    position: 'relative',
+    overflow: 'hidden',
+  },
+  scanningLine: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 3,
+    backgroundColor: '#06B6D4',
+    shadowColor: '#06B6D4',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.8,
+    shadowRadius: 10,
+  },
+  cornerBracket: {
+    position: 'absolute',
+    width: 32,
+    height: 32,
+    borderColor: '#FFFFFF',
+    borderWidth: 4,
+  },
+  topLeft: {
+    top: -4,
+    left: -4,
+    borderRightWidth: 0,
+    borderBottomWidth: 0,
+    borderTopLeftRadius: 24,
+  },
+  topRight: {
+    top: -4,
+    right: -4,
+    borderLeftWidth: 0,
+    borderBottomWidth: 0,
+    borderTopRightRadius: 24,
+  },
+  bottomLeft: {
+    bottom: -4,
+    left: -4,
+    borderRightWidth: 0,
+    borderTopWidth: 0,
+    borderBottomLeftRadius: 24,
+  },
+  bottomRight: {
+    bottom: -4,
+    right: -4,
+    borderLeftWidth: 0,
+    borderTopWidth: 0,
+    borderBottomRightRadius: 24,
+  },
+  instructionCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    borderRadius: 16,
+    padding: 16,
+    marginTop: 24,
+    maxWidth: 320,
+  },
+  instructionTextContainer: {
+    marginLeft: 12,
+    flex: 1,
+  },
+  instructionPrimary: {
+    fontSize: 16,
+    fontWeight: '500',
+    color: '#FFFFFF',
+    marginBottom: 4,
+  },
+  instructionTip: {
+    fontSize: 14,
+    color: 'rgba(255,255,255,0.8)',
+  },
+  bottomActions: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingBottom: 40,
+    paddingTop: 20,
+  },
+  actionButton: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  galleryButtonContainer: {
+    alignItems: 'center',
+  },
+  galleryButton: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    borderWidth: 3,
+    borderColor: '#FFFFFF',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  galleryLabel: {
+    fontSize: 12,
+    fontWeight: '500',
+    color: '#FFFFFF',
+    marginTop: 8,
+  },
+  processingOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.8)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  processingContent: {
+    alignItems: 'center',
+  },
+  processingSpinner: {
+    width: 48,
+    height: 48,
+    marginBottom: 16,
+  },
+  spinner: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    borderWidth: 4,
+    borderColor: '#06B6D4',
+    borderTopColor: 'transparent',
+  },
+  processingText: {
+    fontSize: 16,
+    fontWeight: '500',
+    color: '#FFFFFF',
+    marginBottom: 16,
+  },
+  cancelButton: {
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    paddingVertical: 10,
+    paddingHorizontal: 28,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.24)',
+  },
+  cancelButtonText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.8)',
+    justifyContent: 'flex-end',
+  },
+  resultCard: {
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    minHeight: '60%',
+    maxHeight: '90%',
+  },
+  resultContent: {
+    padding: 24,
+  },
+  successIcon: {
+    alignSelf: 'center',
+    marginBottom: 16,
+  },
+  failureIcon: {
+    alignSelf: 'center',
+    marginBottom: 16,
+  },
+  resultTitle: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: '#10B981',
+    textAlign: 'center',
+    marginBottom: 16,
+  },
+  resultTitleError: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: '#EF4444',
+    textAlign: 'center',
+    marginBottom: 16,
+  },
+  statusBadge: {
+    alignSelf: 'center',
+    backgroundColor: '#DCFCE7',
+    borderWidth: 2,
+    borderColor: '#10B981',
+    borderRadius: 20,
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    marginBottom: 24,
+  },
+  statusBadgeText: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: '#166534',
+  },
+  credentialDetails: {
+    backgroundColor: '#F8FAFC',
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 16,
+  },
+  detailRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginBottom: 16,
+  },
+  detailContent: {
+    marginLeft: 12,
+    flex: 1,
+  },
+  detailLabel: {
+    fontSize: 12,
+    fontWeight: '500',
+    color: '#64748B',
+    marginBottom: 2,
+  },
+  detailValue: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#1E293B',
+  },
+  blockchainProof: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 12,
+    marginBottom: 16,
+  },
+  blockchainProofText: {
+    fontSize: 16,
+    fontWeight: '500',
+    color: '#06B6D4',
+    marginRight: 4,
+  },
+  primaryButton: {
+    backgroundColor: '#06B6D4',
+    paddingVertical: 16,
+    borderRadius: 12,
+    marginBottom: 12,
+  },
+  primaryButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '600',
+    textAlign: 'center',
+  },
+  secondaryButton: {
+    borderWidth: 2,
+    borderColor: '#06B6D4',
+    paddingVertical: 16,
+    borderRadius: 12,
+  },
+  secondaryButtonText: {
+    color: '#06B6D4',
+    fontSize: 16,
+    fontWeight: '600',
+    textAlign: 'center',
+  },
+  errorCard: {
+    flexDirection: 'row',
+    backgroundColor: '#FEF2F2',
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 24,
+  },
+  errorContent: {
+    marginLeft: 12,
+    flex: 1,
+  },
+  errorTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#991B1B',
+    marginBottom: 4,
+  },
+  errorMessage: {
+    fontSize: 14,
+    color: '#7F1D1D',
+    lineHeight: 20,
+  },
+  retryButton: {
+    backgroundColor: '#EF4444',
+    paddingVertical: 16,
+    borderRadius: 12,
+    marginBottom: 12,
+  },
+  retryButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '600',
+    textAlign: 'center',
+  },
+  reportButton: {
+    borderWidth: 2,
+    borderColor: '#EF4444',
+    paddingVertical: 16,
+    borderRadius: 12,
+    marginBottom: 12,
+  },
+  reportButtonText: {
+    color: '#EF4444',
+    fontSize: 16,
+    fontWeight: '600',
+    textAlign: 'center',
+  },
+  closeLink: {
+    color: '#64748B',
+    fontSize: 16,
+    fontWeight: '500',
+    textAlign: 'center',
+  },
+  helpModal: {
+    flex: 1,
+    backgroundColor: '#FFFFFF',
+  },
+  helpHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E2E8F0',
+    paddingTop: 60,
+  },
+  helpTitle: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: '#1E293B',
+  },
+  helpContent: {
+    flex: 1,
+    padding: 24,
+  },
+  helpStep: {
+    flexDirection: 'row',
+    marginBottom: 32,
+  },
+  stepNumber: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#06B6D4',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 16,
+  },
+  stepNumberText: {
     fontSize: 18,
     fontWeight: 'bold',
-    color: '#fff',
+    color: '#FFFFFF',
+  },
+  stepContent: {
+    flex: 1,
+  },
+  stepTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#1E293B',
+    marginBottom: 4,
+  },
+  stepDescription: {
+    fontSize: 16,
+    color: '#64748B',
+    lineHeight: 22,
+  },
+  gotItButton: {
+    backgroundColor: '#06B6D4',
+    margin: 16,
+    marginBottom: 40,
+    paddingVertical: 16,
+    borderRadius: 12,
+  },
+  gotItButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '600',
+    textAlign: 'center',
+  },
+  inactiveCamera: {
+    flex: 1,
+    backgroundColor: '#000',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  inactiveCameraText: {
+    color: '#64748B',
+    fontSize: 16,
   },
 });
