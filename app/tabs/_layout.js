@@ -2,7 +2,7 @@
 import { Tabs } from 'expo-router';
 import { View, StyleSheet } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { Home, FileText, QrCode, Clock, User } from 'lucide-react-native';
+import { Home, FileText, QrCode, Clock, User, Send } from 'lucide-react-native';
 import { useTheme } from '../../contexts/ThemeContext'; // or '../../contexts/ThemeContext'
 
 export default function TabLayout() {
@@ -50,7 +50,13 @@ export default function TabLayout() {
           tabBarIcon: ({ color }) => <FileText size={28} color={color} />,
         }}
       />
-
+     <Tabs.Screen
+        name="transactions"
+        options={{
+          title: 'Transactions',
+          tabBarIcon: ({ color }) => <Send size={28} color={color} />,
+        }}
+      />
       <Tabs.Screen
         name="scan"
         options={{

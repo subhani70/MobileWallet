@@ -3,7 +3,6 @@ import { useEffect, useRef, useState } from 'react';
 import { Stack, usePathname, useRouter } from 'expo-router';
 import { View, Text, ActivityIndicator, StyleSheet, StatusBar } from 'react-native';
 import * as secureStorage from '../services/secureStorage';
-import 'react-native-get-random-values';
 import { ThemeProvider } from '../contexts/ThemeContext';
 
 export default function RootLayout() {
