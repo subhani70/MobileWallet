@@ -1,13 +1,13 @@
 {
   "expo": {
-    "name": "DID Wallet",
+    "name": "VOLTUS Wallet",
     "slug": "did-wallet-mobile",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
+    "icon": "./assets/image.png",
     "userInterfaceStyle": "automatic",
     "splash": {
-      "image": "./assets/splash.png",
+      "image": "./assets/image.png",
       "resizeMode": "contain",
       "backgroundColor": "#1a1a2e"
     },
@@ -23,7 +23,11 @@
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#1a1a2e"
       },
-      "package": "com.yourcompany.didwallet"
+      "package": "com.yourcompany.didwallet",
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png",
@@ -42,6 +46,12 @@
     ],
     "experiments": {
       "typedRoutes": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "ecfa46d8-8262-4e7e-b880-ade5f27582af"
+      }
     }
   }
 }

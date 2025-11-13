@@ -1,3 +1,7 @@
+// blockchainService.js
+// Blockchain service for VoltusWave (VW) native currency on custom Geth network
+// Note: VW is the native currency on this blockchain (similar to ETH on Ethereum mainnet)
+
 import { ethers } from 'ethers';
 import * as secureStorage from './secureStorage';
 import API_CONFIG from '../config/config';
@@ -19,13 +23,14 @@ export const getWallet = async () => {
   return new ethers.Wallet(privateKey, getProvider());
 };
 
-export const getEthBalance = async () => {
+export const getVwBalance = async () => {
   try {
     const wallet = await getWallet();
     const balance = await getProvider().getBalance(wallet.address);
+    // formatEther converts wei to VW (native currency on this Geth network)
     return ethers.formatEther(balance);
   } catch (error) {
-    logger.error('Failed to get ETH balance:', error);
+    logger.error('Failed to get VW balance:', error);
     return '0';
   }
 };
@@ -48,18 +53,19 @@ export const getTokenBalance = async (tokenSymbol) => {
   }
 };
 
-export const sendEth = async (toAddress, amountInEther) => {
+export const sendVw = async (toAddress, amountInVw) => {
   try {
     if (!ethers.isAddress(toAddress)) throw new Error('Invalid recipient address.');
     const wallet = await getWallet();
-    const tx = { to: toAddress, value: ethers.parseEther(amountInEther) };
+    // parseEther converts VW amount to wei (native currency units on this Geth network)
+    const tx = { to: toAddress, value: ethers.parseEther(amountInVw) };
     const txResponse = await wallet.sendTransaction(tx);
     const receipt = await txResponse.wait();
     return { success: true, receipt };
   } catch (error) {
     let friendlyError = error.message;
     if (error.code === 'INSUFFICIENT_FUNDS') {
-      friendlyError = 'Insufficient funds for this transaction, including gas fees.';
+      friendlyError = 'Insufficient VW for this transaction, including gas fees.';
     }
     return { success: false, error: friendlyError };
   }
@@ -81,7 +87,7 @@ export const sendToken = async (tokenSymbol, toAddress, amountInTokens) => {
   } catch (error) {
     let friendlyError = error.message;
     if (error.code === 'INSUFFICIENT_FUNDS') {
-      friendlyError = 'Insufficient ETH for gas fees.';
+      friendlyError = 'Insufficient VW for gas fees.';
     }
     return { success: false, error: friendlyError };
   }
