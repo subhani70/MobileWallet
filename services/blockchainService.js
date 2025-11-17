@@ -4,6 +4,7 @@
 
 import { ethers } from 'ethers';
 import * as secureStorage from './secureStorage';
+import * as accountManager from './accountManager';
 import API_CONFIG from '../config/config';
 import { TOKENS } from '../config/contracts';
 import logger from '../utils/logger';
@@ -18,8 +19,14 @@ export const getProvider = () => {
 };
 
 export const getWallet = async () => {
-  const privateKey = await secureStorage.getPrivateKey();
-  if (!privateKey) throw new Error('Wallet not initialized.');
+  // Use active account's private key from multi-account system
+  const privateKey = await accountManager.getActiveAccountPrivateKey();
+  if (!privateKey) {
+    // Fallback to legacy storage for backward compatibility
+    const legacyKey = await secureStorage.getPrivateKey();
+    if (!legacyKey) throw new Error('Wallet not initialized.');
+    return new ethers.Wallet(legacyKey, getProvider());
+  }
   return new ethers.Wallet(privateKey, getProvider());
 };
 

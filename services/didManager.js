@@ -1,8 +1,9 @@
 // services/didManager.js - MNEMONIC-BASED DID CREATION
-import { generateWalletFromMnemonic } from '../utils/crypto';
+import { generateWalletFromMnemonic, deriveAccountAtIndex } from '../utils/crypto';
 import { generateMnemonic, validateMnemonic } from '../utils/mnemonicUtils';
 import { hashPIN } from '../utils/pinUtils';
 import * as secureStorage from './secureStorage';
+import * as accountManager from './accountManager';
 import apiClient from './api';
 import logger from '../utils/logger';
 
@@ -151,8 +152,9 @@ export const createLocalDID = async () => {
     logger.info('📝 First word: ' + mnemonic.split(' ')[0] + '...');
     
     // Step 3: Derive wallet from mnemonic (MetaMask compatible - m/44'/60'/0'/0/0)
+    // This creates Account 0 (first account)
     logger.info('🔑 Deriving cryptographic keys from mnemonic...');
-    const walletData = await generateWalletFromMnemonic(mnemonic);
+    const walletData = await deriveAccountAtIndex(mnemonic, 0);
     keysGenerated = true;
     
     logger.success(`✅ Wallet derived!`);
@@ -164,7 +166,7 @@ export const createLocalDID = async () => {
     const tempPIN = '000000'; // Temporary placeholder
     const pinHash = await hashPIN(tempPIN);
     
-    // Step 5: Save wallet with mnemonic
+    // Step 5: Save wallet with mnemonic (legacy method for backward compatibility)
     logger.info('💾 Securing wallet...');
     await secureStorage.saveWalletFromMnemonic(
       walletData.privateKey,
@@ -175,7 +177,23 @@ export const createLocalDID = async () => {
       pinHash
     );
     
-    logger.success('✅ Wallet saved securely');
+    // Step 5b: Also save as Account 0 in multi-account system
+    logger.info('💾 Saving as Account 0...');
+    const account0 = {
+      index: 0,
+      address: walletData.address,
+      privateKey: walletData.privateKey,
+      publicKey: walletData.publicKey,
+      did: walletData.did,
+      label: 'Account 1',
+      derivationPath: walletData.derivationPath,
+      createdAt: new Date().toISOString(),
+    };
+    await secureStorage.saveAccounts([account0]);
+    await secureStorage.setActiveAccount(0);
+    await secureStorage.saveSecure('ssi_accounts_migrated', 'true');
+    
+    logger.success('✅ Wallet saved securely (Account 0)');
     
     // Step 6: Register on blockchain
     logger.info('⛓️ Registering on blockchain...');
@@ -238,13 +256,13 @@ export const restoreFromMnemonic = async (mnemonic, pin) => {
     
     logger.info('🔄 Restoring wallet from mnemonic...');
     
-    // Derive wallet
-    const walletData = await generateWalletFromMnemonic(mnemonic);
+    // Derive wallet (Account 0)
+    const walletData = await deriveAccountAtIndex(mnemonic, 0);
     
     // Hash PIN
     const pinHash = await hashPIN(pin);
     
-    // Save wallet
+    // Save wallet (legacy method for backward compatibility)
     await secureStorage.saveWalletFromMnemonic(
       walletData.privateKey,
       walletData.publicKey,
@@ -254,7 +272,22 @@ export const restoreFromMnemonic = async (mnemonic, pin) => {
       pinHash
     );
     
-    logger.success('✅ Wallet restored successfully');
+    // Also save as Account 0 in multi-account system
+    const account0 = {
+      index: 0,
+      address: walletData.address,
+      privateKey: walletData.privateKey,
+      publicKey: walletData.publicKey,
+      did: walletData.did,
+      label: 'Account 1',
+      derivationPath: walletData.derivationPath,
+      createdAt: new Date().toISOString(),
+    };
+    await secureStorage.saveAccounts([account0]);
+    await secureStorage.setActiveAccount(0);
+    await secureStorage.saveSecure('ssi_accounts_migrated', 'true');
+    
+    logger.success('✅ Wallet restored successfully (Account 0)');
     
     return {
       did: walletData.did,
@@ -269,14 +302,35 @@ export const restoreFromMnemonic = async (mnemonic, pin) => {
 };
 
 export const getCurrentDID = async () => {
+  // Use active account from multi-account system
+  const account = await accountManager.getActiveAccount();
+  if (account) {
+    return account.did;
+  }
+  // Fallback to legacy storage
   return await secureStorage.getDID();
 };
 
 export const getWalletInfo = async () => {
+  // Use active account from multi-account system
+  const account = await accountManager.getActiveAccount();
+  const mnemonic = await secureStorage.getMnemonic();
+  
+  if (account) {
+    return {
+      did: account.did,
+      address: account.address,
+      publicKey: account.publicKey,
+      hasMnemonic: !!mnemonic,
+      accountIndex: account.index,
+      label: account.label,
+    };
+  }
+  
+  // Fallback to legacy storage
   const did = await secureStorage.getDID();
   const address = await secureStorage.getAddress();
   const publicKey = await secureStorage.getPublicKey();
-  const mnemonic = await secureStorage.getMnemonic();
   return { did, address, publicKey, hasMnemonic: !!mnemonic };
 };
 

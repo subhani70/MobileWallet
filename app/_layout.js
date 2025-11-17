@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Stack, usePathname, useRouter } from 'expo-router';
 import { View, Text, ActivityIndicator, StyleSheet, StatusBar } from 'react-native';
 import * as secureStorage from '../services/secureStorage';
+import * as accountManager from '../services/accountManager';
 import { ThemeProvider } from '../contexts/ThemeContext';
 
 export default function RootLayout() {
@@ -20,6 +21,8 @@ export default function RootLayout() {
 
   const checkWalletStatus = async () => {
     try {
+      // Initialize multi-account system (runs migration if needed)
+      await accountManager.initializeAccounts();
       await secureStorage.isWalletInitialized();
     } catch (error) {
       console.error('Error checking wallet:', error);

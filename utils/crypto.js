@@ -9,20 +9,26 @@ import { mnemonicToSeed } from './mnemonicUtils.js';
 global.Buffer = Buffer;
 
 /**
- * Generate wallet from BIP-39 mnemonic (PRODUCTION METHOD)
- * This is the new standard method using mnemonic phrases
+ * Derive wallet from BIP-39 mnemonic at a specific account index (MetaMask-style)
+ * This is the standard method for multi-account wallets
  * @param {string} mnemonic - 12-word BIP-39 mnemonic phrase
- * @returns {Promise<object>} Wallet with privateKey, publicKey, address, did
+ * @param {number} accountIndex - Account index (0, 1, 2, ...) - defaults to 0
+ * @returns {Promise<object>} Wallet with privateKey, publicKey, address, did, accountIndex
  */
-export const generateWalletFromMnemonic = async (mnemonic) => {
+export const deriveAccountAtIndex = async (mnemonic, accountIndex = 0) => {
   try {
+    if (accountIndex < 0 || !Number.isInteger(accountIndex)) {
+      throw new Error('Account index must be a non-negative integer');
+    }
+
     // Convert mnemonic to seed
     const seed = await mnemonicToSeed(mnemonic);
     
     // Create HD wallet from seed (BIP-32/BIP-44 derivation path)
-    // Using Ethereum's standard derivation path: m/44'/60'/0'/0/0
+    // Using Ethereum's standard derivation path: m/44'/60'/0'/0/{accountIndex}
+    // This matches MetaMask's derivation path format
     const hdNode = ethers.HDNodeWallet.fromSeed(seed);
-    const derivationPath = "m/44'/60'/0'/0/0";
+    const derivationPath = `m/44'/60'/0'/0/${accountIndex}`;
     const wallet = hdNode.derivePath(derivationPath);
     
     // Get public key
@@ -42,12 +48,26 @@ export const generateWalletFromMnemonic = async (mnemonic) => {
       publicKey: publicKey,
       address: wallet.address,
       did: `did:ethr:VoltusWave:${wallet.address.toLowerCase()}`,
+      accountIndex: accountIndex,
+      derivationPath: derivationPath,
       mnemonic: mnemonic // Include for reference
     };
   } catch (error) {
-    console.error('Error generating wallet from mnemonic:', error);
+    console.error('Error deriving account from mnemonic:', error);
     throw error;
   }
+};
+
+/**
+ * Generate wallet from BIP-39 mnemonic (PRODUCTION METHOD)
+ * This is the new standard method using mnemonic phrases
+ * @deprecated Use deriveAccountAtIndex instead for multi-account support
+ * @param {string} mnemonic - 12-word BIP-39 mnemonic phrase
+ * @returns {Promise<object>} Wallet with privateKey, publicKey, address, did
+ */
+export const generateWalletFromMnemonic = async (mnemonic) => {
+  // Backward compatibility: defaults to account index 0
+  return await deriveAccountAtIndex(mnemonic, 0);
 };
 
 /**

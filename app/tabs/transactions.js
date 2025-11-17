@@ -17,14 +17,20 @@ import * as Haptics from 'expo-haptics';
 import { useTheme } from '../../contexts/ThemeContext';
 import { getVwBalance, sendVw, getTokenBalance, sendToken } from '../../services/blockchainService';
 import { getWalletInfo } from '../../services/didManager';
-import { Send as SendIcon } from 'lucide-react-native';
+import * as accountManager from '../../services/accountManager';
+import { Send as SendIcon, User, Copy, Check, ChevronDown, ChevronUp } from 'lucide-react-native';
+import * as Clipboard from 'expo-clipboard';
 
 export default function TransactionsTab() {
-  const { theme } = useTheme();
+  const { theme, isDark } = useTheme();
   
   const [vwBalance, setVwBalance] = useState('0');
   const [voltBalance, setVoltBalance] = useState('0');
   const [address, setAddress] = useState('');
+  const [accountName, setAccountName] = useState('');
+  const [accountIndex, setAccountIndex] = useState(0);
+  const [accounts, setAccounts] = useState([]);
+  const [dropdownOpen, setDropdownOpen] = useState(false);
   
   const [recipient, setRecipient] = useState('');
   const [amount, setAmount] = useState('');
@@ -73,12 +79,36 @@ export default function TransactionsTab() {
       setIsFetchingBalance(true);
     }
     try {
-      const info = await getWalletInfo();
-      if (info && info.address) {
-        setAddress(info.address);
+      // Use active account from multi-account system
+      const activeAccount = await accountManager.getActiveAccount();
+      let currentAddress = null;
+      let currentAccountName = '';
+      
+      if (activeAccount) {
+        currentAddress = activeAccount.address;
+        currentAccountName = activeAccount.label || `Account ${activeAccount.index + 1}`;
+        const newIndex = activeAccount.index;
+        setAccountIndex(newIndex);
+        console.log('Active account index set to:', newIndex);
+      } else {
+        // Fallback to legacy method
+        const info = await getWalletInfo();
+        if (info && info.address) {
+          currentAddress = info.address;
+          currentAccountName = info.label || 'Main Account';
+        }
+      }
+      
+      // Load all accounts for switcher
+      const allAccounts = await accountManager.getAllAccounts();
+      setAccounts(allAccounts);
+      
+      if (currentAddress) {
+        setAddress(currentAddress);
+        setAccountName(currentAccountName);
         const [vwBal, voltBal] = await Promise.all([
-          getVwBalance(), // Get native VW balance from Geth network
-          getTokenBalance('VOLT')
+          getVwBalance(), // Get native VW balance from Geth network (uses active account)
+          getTokenBalance('VOLT') // Get token balance (uses active account)
         ]);
 
         // Check for balance increases (only after initial load and not suppressed)
@@ -165,6 +195,39 @@ export default function TransactionsTab() {
     loadWalletData();
   }, [loadWalletData]);
 
+  const handleSwitchAccount = async (newAccountIndex) => {
+    try {
+      console.log('Switching to account:', newAccountIndex);
+      
+      // Suppress notifications during account switch
+      suppressNotificationsRef.current = true;
+      
+      // Reset balance tracking for new account
+      previousVwBalanceRef.current = '0';
+      previousVoltBalanceRef.current = '0';
+      isInitialLoadRef.current = true;
+      
+      await accountManager.switchAccount(newAccountIndex);
+      setDropdownOpen(false);
+      
+      // Force reload accounts and wallet data
+      const allAccounts = await accountManager.getAllAccounts();
+      setAccounts(allAccounts);
+      await loadWalletData();
+      
+      // Re-enable notifications after a short delay
+      setTimeout(() => {
+        suppressNotificationsRef.current = false;
+      }, 2000);
+      
+      console.log('Account switched successfully');
+    } catch (error) {
+      console.error('Switch account error:', error);
+      suppressNotificationsRef.current = false;
+      Alert.alert('Error', error.message || 'Failed to switch account');
+    }
+  };
+
   const handleSend = async () => {
     if (!recipient || !amount) {
       Alert.alert('Missing Info', 'Please enter a recipient address and an amount.');
@@ -215,6 +278,16 @@ export default function TransactionsTab() {
 
   const assetToSend = isSendingToken ? 'VOLT' : 'VW';
 
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    if (dropdownOpen) {
+      const timeout = setTimeout(() => {
+        // Auto-close after 30 seconds (safety)
+      }, 30000);
+      return () => clearTimeout(timeout);
+    }
+  }, [dropdownOpen]);
+
   return (
     <View style={[styles.container, { backgroundColor: theme.background }]}>
       <ScrollView 
@@ -228,9 +301,85 @@ export default function TransactionsTab() {
           />
         }
       >
-        <Text style={[styles.headerTitle, { color: theme.text }]}>Transactions</Text>
+        <View style={styles.headerSection}>
+          <Text style={[styles.headerTitle, { color: theme.text }]}>Transactions</Text>
+          {accountName && (
+            <View style={styles.dropdownContainer}>
+              <TouchableOpacity
+                style={[styles.accountBadge, { backgroundColor: theme.surface, borderColor: theme.border }]}
+                onPress={() => setDropdownOpen(!dropdownOpen)}
+                onLongPress={async () => {
+                  await Clipboard.setStringAsync(address);
+                  Alert.alert('Copied!', 'Address copied to clipboard');
+                }}
+              >
+                <User size={14} color={theme.primary} />
+                <Text style={[styles.accountBadgeText, { color: theme.text }]} numberOfLines={1}>
+                  {accountName}
+                </Text>
+                {dropdownOpen ? (
+                  <ChevronUp size={12} color={theme.textTertiary} />
+                ) : (
+                  <ChevronDown size={12} color={theme.textTertiary} />
+                )}
+              </TouchableOpacity>
+              
+              {dropdownOpen && accounts.length > 0 && (
+                <View 
+                  style={[styles.dropdown, { backgroundColor: theme.surface, borderColor: theme.border }]}
+                >
+                  <ScrollView style={styles.dropdownList} nestedScrollEnabled>
+                    {accounts.map((account, idx) => (
+                      <TouchableOpacity
+                        key={account.index}
+                        style={[
+                          styles.dropdownItem,
+                          {
+                            backgroundColor: account.index === accountIndex 
+                              ? (isDark ? 'rgba(6, 182, 212, 0.15)' : 'rgba(6, 182, 212, 0.08)')
+                              : 'transparent',
+                            borderBottomWidth: idx < accounts.length - 1 ? 1 : 0,
+                            borderBottomColor: theme.border,
+                          },
+                        ]}
+                        onPress={async () => {
+                          console.log('Account item pressed:', account.index);
+                          if (account.index !== accountIndex) {
+                            await handleSwitchAccount(account.index);
+                          } else {
+                            setDropdownOpen(false);
+                          }
+                        }}
+                        activeOpacity={0.7}
+                      >
+                        <View style={styles.dropdownItemLeft}>
+                          {account.index === accountIndex && (
+                            <Check size={14} color={theme.primary} />
+                          )}
+                          <View style={styles.dropdownItemInfo}>
+                            <Text style={[styles.dropdownItemLabel, { color: theme.text }]}>
+                              {account.label}
+                            </Text>
+                            <Text style={[styles.dropdownItemAddress, { color: theme.textTertiary }]} numberOfLines={1}>
+                              {`${account.address.substring(0, 6)}...${account.address.substring(38)}`}
+                            </Text>
+                          </View>
+                        </View>
+                        {account.index === accountIndex && (
+                          <View style={[styles.activeBadgeSmall, { backgroundColor: theme.primary }]}>
+                            <Text style={styles.activeBadgeSmallText}>Active</Text>
+                          </View>
+                        )}
+                      </TouchableOpacity>
+                    ))}
+                  </ScrollView>
+                </View>
+              )}
+            </View>
+          )}
+        </View>
         
-        <View style={[styles.balanceCard, { backgroundColor: theme.surface }]}>
+        <View style={[styles.balanceCard, { backgroundColor: theme.surface, borderColor: theme.border }]}>
           <Animated.View
             style={[
               StyleSheet.absoluteFill,
@@ -238,13 +387,23 @@ export default function TransactionsTab() {
                 backgroundColor: theme.primary,
                 opacity: highlightAnimation.interpolate({
                   inputRange: [0, 1],
-                  outputRange: [0, 0.2],
+                  outputRange: [0, 0.15],
                 }),
-                borderRadius: 16,
+                borderRadius: 18,
               }
             ]}
           />
-          <Text style={[styles.balanceLabel, { color: theme.textSecondary }]}>Your Balances</Text>
+          <View style={styles.balanceHeader}>
+            <Text style={[styles.balanceLabel, { color: theme.textSecondary }]}>Your Balances</Text>
+            {accountName && (
+              <View style={[styles.accountIndicator, { backgroundColor: theme.primary + '15' }]}>
+                <Check size={12} color={theme.primary} />
+                <Text style={[styles.accountIndicatorText, { color: theme.primary }]} numberOfLines={1}>
+                  {accountName}
+                </Text>
+              </View>
+            )}
+          </View>
           {isFetchingBalance ? (
             <ActivityIndicator color={theme.primary} style={{ marginVertical: 20 }} />
           ) : (
@@ -259,10 +418,21 @@ export default function TransactionsTab() {
               </View>
             </>
           )}
-          <Text style={[styles.address, { color: theme.textTertiary }]} numberOfLines={1}>{address}</Text>
+          <TouchableOpacity
+            onPress={async () => {
+              await Clipboard.setStringAsync(address);
+              Alert.alert('Copied!', 'Address copied to clipboard');
+            }}
+            style={[styles.addressContainer, { borderTopColor: theme.border }]}
+          >
+            <Text style={[styles.address, { color: theme.textTertiary }]} numberOfLines={1}>
+              {address ? `${address.substring(0, 6)}...${address.substring(38)}` : 'Loading...'}
+            </Text>
+            <Copy size={14} color={theme.textTertiary} />
+          </TouchableOpacity>
         </View>
 
-        <View style={[styles.sendCard, { backgroundColor: theme.surface }]}>
+        <View style={[styles.sendCard, { backgroundColor: theme.surface, borderColor: theme.border }]}>
           <View style={styles.sendHeader}>
             <Text style={[styles.sendTitle, { color: theme.text }]}>Send</Text>
             <View style={styles.toggleContainer}>
@@ -315,20 +485,203 @@ export default function TransactionsTab() {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  scrollContent: { padding: 20 },
-  headerTitle: { fontSize: 28, fontWeight: 'bold', marginBottom: 20, paddingTop: 40 },
-  balanceCard: { padding: 20, borderRadius: 16, marginBottom: 24, gap: 16, overflow: 'hidden', position: 'relative' },
-  balanceRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 8, zIndex: 1 },
-  balanceAmount: { fontSize: 32, fontWeight: 'bold', lineHeight: 36, zIndex: 1 },
-  balanceSymbol: { fontSize: 16, paddingBottom: 4, fontWeight: '600', zIndex: 1 },
-  balanceLabel: { fontSize: 16, fontWeight: '600', zIndex: 1 },
-  address: { fontSize: 12, marginTop: 8, fontFamily: 'monospace', zIndex: 1 },
-  sendCard: { padding: 20, borderRadius: 16 },
-  sendHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 },
-  sendTitle: { fontSize: 20, fontWeight: 'bold' },
-  toggleContainer: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  toggleLabel: { fontSize: 14, fontWeight: '600' },
-  input: { height: 50, borderWidth: 1, borderRadius: 10, paddingHorizontal: 15, fontSize: 16, marginBottom: 12 },
-  sendButton: { height: 50, borderRadius: 10, justifyContent: 'center', alignItems: 'center', flexDirection: 'row', gap: 8 },
-  sendButtonText: { color: '#FFFFFF', fontSize: 18, fontWeight: 'bold' },
+  scrollContent: { padding: 20, paddingBottom: 40 },
+  headerSection: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 20,
+    paddingTop: 40,
+    gap: 12,
+  },
+  headerTitle: { 
+    fontSize: 28, 
+    fontWeight: 'bold', 
+    flex: 1,
+  },
+  dropdownContainer: {
+    position: 'relative',
+    maxWidth: '45%',
+    zIndex: 1000,
+    elevation: 1000,
+  },
+  accountBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 12,
+    borderWidth: 1,
+    width: '100%',
+  },
+  accountBadgeText: {
+    fontSize: 13,
+    fontWeight: '600',
+    flex: 1,
+  },
+  dropdown: {
+    position: 'absolute',
+    top: '100%',
+    right: 0,
+    marginTop: 8,
+    borderRadius: 12,
+    borderWidth: 1,
+    maxHeight: 300,
+    minWidth: 280,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 1001,
+    zIndex: 1001,
+  },
+  dropdownList: {
+    maxHeight: 300,
+  },
+  dropdownItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 12,
+    paddingHorizontal: 16,
+  },
+  dropdownItemLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    flex: 1,
+  },
+  dropdownItemInfo: {
+    flex: 1,
+  },
+  dropdownItemLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    marginBottom: 2,
+  },
+  dropdownItemAddress: {
+    fontSize: 11,
+    fontFamily: 'monospace',
+  },
+  activeBadgeSmall: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 8,
+  },
+  activeBadgeSmallText: {
+    color: '#FFFFFF',
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  balanceCard: { 
+    padding: 20, 
+    borderRadius: 18, 
+    marginBottom: 24, 
+    gap: 16, 
+    overflow: 'hidden', 
+    position: 'relative',
+    borderWidth: 1,
+  },
+  balanceHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    zIndex: 1,
+  },
+  balanceRow: { 
+    flexDirection: 'row', 
+    alignItems: 'flex-end', 
+    gap: 8, 
+    zIndex: 1 
+  },
+  balanceAmount: { 
+    fontSize: 32, 
+    fontWeight: 'bold', 
+    lineHeight: 36, 
+    zIndex: 1 
+  },
+  balanceSymbol: { 
+    fontSize: 16, 
+    paddingBottom: 4, 
+    fontWeight: '600', 
+    zIndex: 1 
+  },
+  balanceLabel: { 
+    fontSize: 16, 
+    fontWeight: '600', 
+    zIndex: 1 
+  },
+  accountIndicator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+  },
+  accountIndicatorText: {
+    fontSize: 11,
+    fontWeight: '600',
+    maxWidth: 100,
+  },
+  addressContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 4,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    zIndex: 1,
+  },
+  address: { 
+    fontSize: 12, 
+    fontFamily: 'monospace', 
+    flex: 1,
+  },
+  sendCard: { 
+    padding: 20, 
+    borderRadius: 18,
+    borderWidth: 1,
+  },
+  sendHeader: { 
+    flexDirection: 'row', 
+    justifyContent: 'space-between', 
+    alignItems: 'center', 
+    marginBottom: 16 
+  },
+  sendTitle: { 
+    fontSize: 20, 
+    fontWeight: 'bold' 
+  },
+  toggleContainer: { 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    gap: 8 
+  },
+  toggleLabel: { 
+    fontSize: 14, 
+    fontWeight: '600' 
+  },
+  input: { 
+    height: 50, 
+    borderWidth: 1, 
+    borderRadius: 12, 
+    paddingHorizontal: 15, 
+    fontSize: 16, 
+    marginBottom: 12 
+  },
+  sendButton: { 
+    height: 50, 
+    borderRadius: 12, 
+    justifyContent: 'center', 
+    alignItems: 'center', 
+    flexDirection: 'row', 
+    gap: 8 
+  },
+  sendButtonText: { 
+    color: '#FFFFFF', 
+    fontSize: 18, 
+    fontWeight: 'bold' 
+  },
 });
