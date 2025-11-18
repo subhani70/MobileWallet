@@ -50,13 +50,7 @@ export default function TabLayout() {
           tabBarIcon: ({ color }) => <FileText size={28} color={color} />,
         }}
       />
-     <Tabs.Screen
-        name="transactions"
-        options={{
-          title: 'Transactions',
-          tabBarIcon: ({ color }) => <Send size={28} color={color} />,
-        }}
-      />
+   
       <Tabs.Screen
         name="scan"
         options={{
@@ -75,14 +69,21 @@ export default function TabLayout() {
           ),
         }}
       />
-
       <Tabs.Screen
+        name="transactions"
+        options={{
+          title: 'Transactions',
+          tabBarIcon: ({ color }) => <Send size={28} color={color} />,
+        }}
+      />
+
+      {/* <Tabs.Screen
         name="activity"
         options={{
           title: 'Activity',
           tabBarIcon: ({ color }) => <Clock size={28} color={color} />,
         }}
-      />
+      /> */}
 
       <Tabs.Screen
         name="profile"
