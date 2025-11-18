@@ -81,23 +81,35 @@ export default function SendScreen() {
       console.warn('Failed to load custom tokens', error);
       syncAssets(network, []);
     }
-  }, [network, syncAssets]);
+  }, [network?.id, syncAssets]);
 
+  // Load account and network only once on mount
   useEffect(() => {
     loadAccount();
     loadNetwork();
-  }, [loadAccount, loadNetwork]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
+  // Refresh tokens when network changes
   useEffect(() => {
-    refreshTokens();
-  }, [refreshTokens]);
+    if (network?.id) {
+      refreshTokens();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [network?.id]);
 
+  // Reload data when screen is focused
   useFocusEffect(
     useCallback(() => {
-      loadAccount();
-      loadNetwork();
-      refreshTokens();
-    }, [loadAccount, loadNetwork, refreshTokens])
+      const reload = async () => {
+        await loadAccount();
+        await loadNetwork();
+        // refreshTokens will be called by the network useEffect when network is set
+      };
+      
+      reload();
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [])
   );
 
   const executeSend = useCallback(async () => {

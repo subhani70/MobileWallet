@@ -51,9 +51,7 @@ export const saveSecure = async (key, value) => {
 export const getSecure = async (key) => {
   try {
     const value = await SecureStore.getItemAsync(key);
-    if (value) {
-      logger.info(`🔓 Retrieved: ${key}`);
-    }
+    // Only log errors, not every retrieval (reduces log spam)
     return value;
   } catch (error) {
     logger.error(`Failed to retrieve ${key}: ${error.message}`);
