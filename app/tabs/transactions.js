@@ -4,7 +4,6 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
-  Alert,
   ActivityIndicator,
   ScrollView,
   RefreshControl,
@@ -52,6 +51,61 @@ export default function TransactionsTab() {
   const isInitialLoadRef = useRef(true);
   const suppressNotificationsRef = useRef(false);
   const highlightAnimation = useRef(new Animated.Value(0)).current;
+  const [toastConfig, setToastConfig] = useState(null);
+  const toastAnimation = useRef(new Animated.Value(0)).current;
+  const toastTimeoutRef = useRef(null);
+  const toastTranslateY = useMemo(
+    () =>
+      toastAnimation.interpolate({
+        inputRange: [0, 1],
+        outputRange: [-80, 0],
+      }),
+    [toastAnimation]
+  );
+
+  const hideToast = useCallback(() => {
+    if (toastTimeoutRef.current) {
+      clearTimeout(toastTimeoutRef.current);
+      toastTimeoutRef.current = null;
+    }
+    Animated.timing(toastAnimation, {
+      toValue: 0,
+      duration: 200,
+      useNativeDriver: true,
+    }).start(({ finished }) => {
+      if (finished) {
+        setToastConfig(null);
+      }
+    });
+  }, [toastAnimation]);
+
+  const presentAlert = useCallback(
+    ({ title, message, icon = '✨', type = 'info', duration = 3600 } = {}) => {
+      if (!title && !message) return;
+      if (toastTimeoutRef.current) {
+        clearTimeout(toastTimeoutRef.current);
+        toastTimeoutRef.current = null;
+      }
+      setToastConfig({ title, message, icon, type });
+      Animated.timing(toastAnimation, {
+        toValue: 1,
+        duration: 220,
+        useNativeDriver: true,
+      }).start();
+      toastTimeoutRef.current = setTimeout(() => {
+        hideToast();
+      }, duration);
+    },
+    [hideToast, toastAnimation]
+  );
+
+  useEffect(() => {
+    return () => {
+      if (toastTimeoutRef.current) {
+        clearTimeout(toastTimeoutRef.current);
+      }
+    };
+  }, []);
 
   const loadSelectedNetwork = useCallback(async () => {
     try {
@@ -141,12 +195,13 @@ export default function TransactionsTab() {
     // Haptic feedback
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
     
-    // Show alert
-    Alert.alert(
-      '💰 Funds Received!',
-      `You received ${parseFloat(amount).toFixed(asset === 'VW' ? 4 : 2)} ${asset}`,
-      [{ text: 'OK' }]
-    );
+    // Show in-app banner
+    presentAlert({
+      icon: '💰',
+      title: 'Funds received',
+      message: `You received ${parseFloat(amount).toFixed(asset === 'VW' ? 4 : 2)} ${asset}`,
+      type: 'success',
+    });
 
     // Highlight animation
     Animated.sequence([
@@ -161,7 +216,7 @@ export default function TransactionsTab() {
         useNativeDriver: false,
       }),
     ]).start();
-  }, [highlightAnimation]);
+  }, [highlightAnimation, presentAlert]);
 
   const loadWalletData = useCallback(async (silent = false) => {
     if (!silent) {
@@ -248,15 +303,23 @@ export default function TransactionsTab() {
     })();
   }, [loadWalletData, loadSelectedNetwork, loadCustomTokens]);
 
-  const handleCopyAddress = useCallback(async (value) => {
-    if (!value) return;
-    try {
-      await Clipboard.setStringAsync(value);
-      Alert.alert('Copied', 'Wallet address copied to clipboard');
-    } catch (error) {
-      console.warn('Failed to copy address', error);
-    }
-  }, []);
+  const handleCopyAddress = useCallback(
+    async (value) => {
+      if (!value) return;
+      try {
+        await Clipboard.setStringAsync(value);
+        presentAlert({
+          icon: '📋',
+          title: 'Address copied',
+          message: 'Wallet address copied to clipboard.',
+          type: 'info',
+        });
+      } catch (error) {
+        console.warn('Failed to copy address', error);
+      }
+    },
+    [presentAlert]
+  );
 
   const handleSwitchAccount = async (newAccountIndex) => {
     try {
@@ -287,7 +350,12 @@ export default function TransactionsTab() {
     } catch (error) {
       console.error('Switch account error:', error);
       suppressNotificationsRef.current = false;
-      Alert.alert('Error', error.message || 'Failed to switch account');
+      presentAlert({
+        icon: '⚠️',
+        title: 'Unable to switch',
+        message: error.message || 'Failed to switch account.',
+        type: 'error',
+      });
     }
   };
 
@@ -319,9 +387,19 @@ export default function TransactionsTab() {
       await loadCustomTokens();
       setDropdownOpen(false);
       setImportModalVisible(false);
-      Alert.alert('Account imported', 'The account has been added and set as active.');
+      presentAlert({
+        icon: '✅',
+        title: 'Account imported',
+        message: 'The account has been added and set as active.',
+        type: 'success',
+      });
     } catch (error) {
-      Alert.alert('Import failed', error.message || 'Unable to import account. Check the private key and try again.');
+      presentAlert({
+        icon: '❌',
+        title: 'Import failed',
+        message: error.message || 'Unable to import account. Check the private key and try again.',
+        type: 'error',
+      });
     } finally {
       setIsImportingAccount(false);
     }
@@ -377,6 +455,46 @@ export default function TransactionsTab() {
     return rows;
   }, [customTokens, tokenBalances, nativeSymbol, selectedNetwork?.name, formattedVw]);
 
+  const toastThemes = useMemo(
+    () => ({
+      success: {
+        background: isDark ? 'rgba(16,185,129,0.18)' : '#ECFDF5',
+        border: isDark ? 'rgba(16,185,129,0.5)' : '#A7F3D0',
+        iconBg: isDark ? 'rgba(16,185,129,0.35)' : '#D1FAE5',
+        accent: '#10B981',
+        title: theme.text,
+        message: theme.textSecondary,
+      },
+      error: {
+        background: isDark ? 'rgba(239,68,68,0.18)' : '#FEE2E2',
+        border: isDark ? 'rgba(239,68,68,0.5)' : '#FECACA',
+        iconBg: isDark ? 'rgba(239,68,68,0.35)' : '#FECACA',
+        accent: '#EF4444',
+        title: theme.text,
+        message: theme.textSecondary,
+      },
+      warning: {
+        background: isDark ? 'rgba(245,158,11,0.2)' : '#FEF3C7',
+        border: isDark ? 'rgba(245,158,11,0.45)' : '#FDE68A',
+        iconBg: isDark ? 'rgba(245,158,11,0.3)' : '#FDE68A',
+        accent: '#F59E0B',
+        title: theme.text,
+        message: theme.textSecondary,
+      },
+      info: {
+        background: isDark ? 'rgba(59,130,246,0.2)' : '#DBEAFE',
+        border: isDark ? 'rgba(59,130,246,0.45)' : '#BFDBFE',
+        iconBg: isDark ? 'rgba(59,130,246,0.35)' : '#BFDBFE',
+        accent: '#3B82F6',
+        title: theme.text,
+        message: theme.textSecondary,
+      },
+    }),
+    [isDark, theme.text, theme.textSecondary]
+  );
+
+  const activeToastTone = (toastConfig && toastThemes[toastConfig.type]) || toastThemes.info;
+
   const actionButtons = [
     {
       key: 'send',
@@ -397,19 +515,65 @@ export default function TransactionsTab() {
       label: 'Swap',
       icon: 'swap-horizontal',
       color: '#8B5CF6',
-      onPress: () => Alert.alert('Coming soon', 'Swap will be available soon.'),
+      onPress: () =>
+        presentAlert({
+          icon: '🚧',
+          title: 'Swap coming soon',
+          message: 'Swap will be available soon.',
+          type: 'warning',
+        }),
     },
     {
       key: 'buy',
       label: 'Buy',
       icon: 'card',
       color: '#F59E0B',
-      onPress: () => Alert.alert('Coming soon', 'Fiat on-ramps are coming soon.'),
+      onPress: () =>
+        presentAlert({
+          icon: '💳',
+          title: 'Fiat on-ramps soon',
+          message: 'Fiat purchase options are on the way.',
+          type: 'info',
+        }),
     },
   ];
 
   return (
     <View style={[styles.container, { backgroundColor: theme.background }]}>
+      {toastConfig && (
+        <View pointerEvents="box-none" style={styles.toastWrapper}>
+          <Animated.View
+            style={[
+              styles.toastContainer,
+              {
+                backgroundColor: activeToastTone.background,
+                borderColor: activeToastTone.border,
+                transform: [{ translateY: toastTranslateY }],
+                opacity: toastAnimation,
+              },
+            ]}
+          >
+            <View style={[styles.toastIconBadge, { backgroundColor: activeToastTone.iconBg }]}>
+              <Text style={styles.toastIconText}>{toastConfig.icon}</Text>
+            </View>
+            <View style={styles.toastTextGroup}>
+              {!!toastConfig.title && (
+                <Text style={[styles.toastTitle, { color: activeToastTone.title }]} numberOfLines={1}>
+                  {toastConfig.title}
+                </Text>
+              )}
+              {!!toastConfig.message && (
+                <Text style={[styles.toastMessage, { color: activeToastTone.message }]} numberOfLines={2}>
+                  {toastConfig.message}
+                </Text>
+              )}
+            </View>
+            <TouchableOpacity style={styles.toastDismiss} onPress={hideToast} activeOpacity={0.7}>
+              <Ionicons name="close" size={18} color={activeToastTone.accent} />
+            </TouchableOpacity>
+          </Animated.View>
+        </View>
+      )}
       <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
       <ScrollView
         style={styles.scrollView}
@@ -426,28 +590,25 @@ export default function TransactionsTab() {
         <View style={styles.headerRegion}>
           <View style={[styles.header, { backgroundColor: theme.surface, borderColor: theme.border }]}>
             <TouchableOpacity
-              style={[styles.iconButton, { borderColor: theme.border }]}
-              onPress={() => setDropdownOpen(!dropdownOpen)}
-              activeOpacity={0.8}
-            >
-              <Ionicons name="people-outline" size={22} color={theme.text} />
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={[styles.networkSelector, { borderColor: theme.border, backgroundColor: theme.surfaceSecondary || theme.surface }]}
-              onPress={() => router.push('/manage-networks')}
+              style={[
+                styles.accountSelector,
+                { borderColor: theme.border, backgroundColor: theme.surfaceSecondary || theme.surface },
+              ]}
+              onPress={() => setDropdownOpen((prev) => !prev)}
               activeOpacity={0.85}
             >
-              <View style={[styles.networkDot, { backgroundColor: theme.primary }]} />
               <View style={{ flex: 1 }}>
-                <Text style={[styles.networkName, { color: theme.text }]} numberOfLines={1}>
-                  {selectedNetwork?.name || 'Select Network'}
+                <Text style={[styles.accountName, { color: theme.text }]} numberOfLines={1}>
+                  {accountName || 'Select account'}
                 </Text>
-                <Text style={[styles.networkChain, { color: theme.textTertiary }]} numberOfLines={1}>
-                  {selectedNetwork?.chainId ? `Chain ID: ${selectedNetwork.chainId}` : 'Tap to manage'}
+                <Text style={[styles.accountAddress, { color: theme.textTertiary }]} numberOfLines={1}>
+                  {address ? `${address.substring(0, 10)}...${address.substring(address.length - 6)}` : 'Tap to choose an account'}
+                </Text>
+                <Text style={[styles.accountMeta, { color: theme.textSecondary }]} numberOfLines={1}>
+                  {selectedNetwork?.name ? `Network: ${selectedNetwork.name}` : 'No network selected'}
                 </Text>
               </View>
-              <Ionicons name="chevron-down" size={16} color={theme.text} />
+              <Ionicons name={dropdownOpen ? 'chevron-up' : 'chevron-down'} size={18} color={theme.text} />
             </TouchableOpacity>
 
             <TouchableOpacity
@@ -462,7 +623,7 @@ export default function TransactionsTab() {
               onPress={() => router.push('/manage-networks')}
               activeOpacity={0.8}
             >
-              <Ionicons name="settings-outline" size={22} color={theme.text} />
+              <Ionicons name="create-outline" size={22} color={theme.text} />
             </TouchableOpacity>
           </View>
 
@@ -686,6 +847,53 @@ const styles = StyleSheet.create({
     paddingTop: 52,
     marginBottom: 16,
   },
+  toastWrapper: {
+    position: 'absolute',
+    top: 12,
+    left: 0,
+    right: 0,
+    zIndex: 40,
+    paddingHorizontal: 20,
+  },
+  toastContainer: {
+    borderRadius: 20,
+    borderWidth: 1,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    elevation: 8,
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.15,
+    shadowRadius: 20,
+  },
+  toastIconBadge: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  toastIconText: {
+    fontSize: 20,
+  },
+  toastTextGroup: {
+    flex: 1,
+  },
+  toastTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    marginBottom: 2,
+  },
+  toastMessage: {
+    fontSize: 13,
+    opacity: 0.9,
+  },
+  toastDismiss: {
+    padding: 6,
+  },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -702,7 +910,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     borderWidth: 1,
   },
-  networkSelector: {
+  accountSelector: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
@@ -712,18 +920,19 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     gap: 10,
   },
-  networkDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-  },
-  networkName: {
+  accountName: {
     fontSize: 15,
     fontWeight: '600',
   },
-  networkChain: {
+  accountAddress: {
     fontSize: 12,
     fontWeight: '500',
+    fontFamily: 'monospace',
+    marginTop: 2,
+  },
+  accountMeta: {
+    fontSize: 12,
+    marginTop: 2,
   },
   dropdownWrapper: {
     position: 'absolute',

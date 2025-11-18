@@ -121,7 +121,7 @@ export default function SendScreen() {
           ? await sendTokenByAddress(selectedAsset.address, selectedAsset.decimals || 18, recipient, amount)
           : await sendVw(recipient, amount);
       if (result.success) {
-        Alert.alert('Success', `Transaction confirmed in block ${result.receipt.blockNumber}`, [
+        Alert.alert('Success', 'Transaction submitted successfully.', [
           {
             text: 'Done',
             onPress: () => router.back(),

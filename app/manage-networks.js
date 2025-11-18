@@ -34,7 +34,9 @@ export default function ManageNetworksScreen() {
   const [saving, setSaving] = useState(false);
   const [customNetworks, setCustomNetworks] = useState([]);
   const [modalVisible, setModalVisible] = useState(false);
-  const [adding, setAdding] = useState(false);
+  const [modalMode, setModalMode] = useState('add');
+  const [editingNetworkId, setEditingNetworkId] = useState(null);
+  const [submittingNetwork, setSubmittingNetwork] = useState(false);
   const [form, setForm] = useState({
     name: '',
     rpcUrl: '',
@@ -96,7 +98,7 @@ export default function ManageNetworksScreen() {
     }
   };
 
-  const resetForm = () =>
+  const resetForm = useCallback(() => {
     setForm({
       name: '',
       rpcUrl: '',
@@ -104,8 +106,37 @@ export default function ManageNetworksScreen() {
       symbol: '',
       explorer: '',
     });
+  }, []);
 
-  const handleAddNetwork = async () => {
+  const closeModal = useCallback(() => {
+    setModalVisible(false);
+    setModalMode('add');
+    setEditingNetworkId(null);
+    resetForm();
+  }, [resetForm]);
+
+  const openAddModal = useCallback(() => {
+    resetForm();
+    setModalMode('add');
+    setEditingNetworkId(null);
+    setModalVisible(true);
+  }, [resetForm]);
+
+  const openEditModal = useCallback((network) => {
+    if (!network?.id) return;
+    setModalMode('edit');
+    setEditingNetworkId(network.id);
+    setForm({
+      name: network.name || '',
+      rpcUrl: network.rpcUrl || '',
+      chainId: network.chainId ? String(network.chainId) : '',
+      symbol: network.symbol || '',
+      explorer: network.explorer || '',
+    });
+    setModalVisible(true);
+  }, []);
+
+  const handleSubmitNetwork = async () => {
     const trimmed = {
       name: form.name.trim(),
       rpcUrl: form.rpcUrl.trim(),
@@ -119,12 +150,30 @@ export default function ManageNetworksScreen() {
       return;
     }
 
-    if (allNetworks.some((network) => network.chainId === trimmed.chainId)) {
+    const duplicateChainId = allNetworks.some((network) => {
+      if (modalMode === 'edit' && network.id === editingNetworkId) {
+        return false;
+      }
+      return network.chainId === trimmed.chainId;
+    });
+
+    if (duplicateChainId) {
       Alert.alert('Duplicate chain ID', 'A network with this chain ID already exists.');
       return;
     }
 
-    const newNetwork = {
+    if (modalMode === 'edit' && !editingNetworkId) {
+      Alert.alert('Missing info', 'No network selected to edit.');
+      return;
+    }
+
+    const existingNetwork = modalMode === 'edit' ? customNetworks.find((network) => network.id === editingNetworkId) : null;
+    if (modalMode === 'edit' && !existingNetwork) {
+      Alert.alert('Not found', 'Unable to locate this custom network.');
+      return;
+    }
+
+    const payload = {
       id: trimmed.chainId,
       name: trimmed.name,
       rpcUrl: trimmed.rpcUrl,
@@ -132,23 +181,36 @@ export default function ManageNetworksScreen() {
       symbol: trimmed.symbol,
       explorer: trimmed.explorer,
       isCustom: true,
-      type: 'Custom',
+      type: existingNetwork?.type || 'Custom',
     };
 
-    setAdding(true);
+    setSubmittingNetwork(true);
     try {
-      await ensureNetworkReachable(newNetwork);
-      const updatedCustom = [...customNetworks, newNetwork];
-      await saveCustomNetworks(updatedCustom);
-      setCustomNetworks(updatedCustom);
-      await updateSelectedNetwork(newNetwork, { silent: true });
-      Alert.alert('Success', 'Custom network added and selected.');
-      setModalVisible(false);
-      resetForm();
+      await ensureNetworkReachable(payload);
+      if (modalMode === 'add') {
+        const updatedCustom = [...customNetworks, payload];
+        await saveCustomNetworks(updatedCustom);
+        setCustomNetworks(updatedCustom);
+        await updateSelectedNetwork(payload, { silent: true });
+        Alert.alert('Success', 'Custom network added and selected.');
+      } else {
+        const updatedCustom = customNetworks.map((network) => (network.id === editingNetworkId ? payload : network));
+        await saveCustomNetworks(updatedCustom);
+        setCustomNetworks(updatedCustom);
+        if (activeNetwork?.id === editingNetworkId) {
+          await updateSelectedNetwork(payload, { silent: true });
+        }
+        Alert.alert('Updated', 'Custom network updated.');
+      }
+      closeModal();
     } catch (error) {
-      Alert.alert('Network unreachable', error.message || 'Could not connect to this RPC endpoint.');
+      const isAddMode = modalMode === 'add';
+      Alert.alert(
+        isAddMode ? 'Network unreachable' : 'Update failed',
+        error.message || (isAddMode ? 'Could not connect to this RPC endpoint.' : 'Unable to update this network.')
+      );
     } finally {
-      setAdding(false);
+      setSubmittingNetwork(false);
     }
   };
 
@@ -203,9 +265,40 @@ export default function ManageNetworksScreen() {
             {verifyingNetworkId === network.id ? (
               <ActivityIndicator size="small" color={theme.primary} />
             ) : network.isCustom ? (
-              <TouchableOpacity style={styles.deleteButton} onPress={() => handleDeleteNetwork(network)}>
-                <Ionicons name="trash-outline" size={18} color="#EF4444" />
-              </TouchableOpacity>
+              <View style={styles.customActions}>
+                <TouchableOpacity
+                  style={[
+                    styles.editButton,
+                    {
+                      borderColor: theme.border,
+                      backgroundColor: isDark ? 'rgba(59,130,246,0.18)' : '#EEF2FF',
+                    },
+                  ]}
+                  onPress={(event) => {
+                    event.stopPropagation?.();
+                    openEditModal(network);
+                  }}
+                  activeOpacity={0.8}
+                >
+                  <Ionicons name="create-outline" size={18} color={theme.primary} />
+                  <Text style={[styles.editButtonText, { color: theme.primary }]}>Edit</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[
+                    styles.deleteButton,
+                    {
+                      backgroundColor: isDark ? 'rgba(239,68,68,0.15)' : '#FEE2E2',
+                    },
+                  ]}
+                  onPress={(event) => {
+                    event.stopPropagation?.();
+                    handleDeleteNetwork(network);
+                  }}
+                  activeOpacity={0.8}
+                >
+                  <Ionicons name="trash-outline" size={18} color="#EF4444" />
+                </TouchableOpacity>
+              </View>
             ) : (
               <View style={[styles.pill, { backgroundColor: isDark ? 'rgba(148,163,184,0.2)' : 'rgba(148,163,184,0.15)' }]}>
                 <Text style={styles.pillText}>{network.type || 'Default'}</Text>
@@ -230,7 +323,7 @@ export default function ManageNetworksScreen() {
         <Text style={[styles.headerTitle, { color: theme.text }]}>Manage Networks</Text>
         <TouchableOpacity
           style={[styles.addButton, { borderColor: theme.border }]}
-          onPress={() => setModalVisible(true)}
+          onPress={openAddModal}
           activeOpacity={0.8}
         >
           <Ionicons name="add" size={20} color={theme.primary} />
@@ -263,12 +356,14 @@ export default function ManageNetworksScreen() {
         </ScrollView>
       )}
 
-      <Modal animationType="slide" transparent visible={modalVisible} onRequestClose={() => setModalVisible(false)}>
+      <Modal animationType="slide" transparent visible={modalVisible} onRequestClose={closeModal}>
         <View style={styles.modalOverlay}>
           <View style={[styles.modalContent, { backgroundColor: theme.surface }]}>
             <View style={[styles.modalHeader, { borderBottomColor: theme.border }]}>
-              <Text style={[styles.modalTitle, { color: theme.text }]}>Add Custom Network</Text>
-              <TouchableOpacity onPress={() => setModalVisible(false)}>
+              <Text style={[styles.modalTitle, { color: theme.text }]}>
+                {modalMode === 'edit' ? 'Edit Custom Network' : 'Add Custom Network'}
+              </Text>
+              <TouchableOpacity onPress={closeModal}>
                 <Ionicons name="close" size={22} color={theme.text} />
               </TouchableOpacity>
             </View>
@@ -331,14 +426,16 @@ export default function ManageNetworksScreen() {
 
               <TouchableOpacity
                 style={[styles.submitButton, { backgroundColor: theme.primary }]}
-                onPress={handleAddNetwork}
-                disabled={adding}
+                onPress={handleSubmitNetwork}
+                disabled={submittingNetwork}
                 activeOpacity={0.9}
               >
-                {adding ? (
+                {submittingNetwork ? (
                   <ActivityIndicator color="#fff" />
                 ) : (
-                  <Text style={styles.submitButtonText}>Add Network</Text>
+                  <Text style={styles.submitButtonText}>
+                    {modalMode === 'edit' ? 'Save Changes' : 'Add Network'}
+                  </Text>
                 )}
               </TouchableOpacity>
             </ScrollView>
@@ -462,8 +559,27 @@ const styles = StyleSheet.create({
   networkDetail: {
     fontSize: 12,
   },
+  customActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  editButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 999,
+    borderWidth: 1,
+  },
+  editButtonText: {
+    fontSize: 13,
+    fontWeight: '600',
+  },
   deleteButton: {
-    padding: 6,
+    padding: 8,
+    borderRadius: 14,
   },
   pill: {
     paddingHorizontal: 10,
