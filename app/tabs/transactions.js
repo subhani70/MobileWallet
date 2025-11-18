@@ -1,51 +1,133 @@
-import { useState, useCallback, useEffect, useRef } from 'react';
+import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import {
   View,
   Text,
   StyleSheet,
-  TextInput,
   TouchableOpacity,
   Alert,
   ActivityIndicator,
   ScrollView,
-  Switch,
   RefreshControl,
   Animated,
+  StatusBar,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import * as Haptics from 'expo-haptics';
+import { Ionicons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useRouter } from 'expo-router';
 import { useTheme } from '../../contexts/ThemeContext';
-import { getVwBalance, sendVw, getTokenBalance, sendToken } from '../../services/blockchainService';
+import { getVwBalance, getTokenBalanceByAddress } from '../../services/blockchainService';
 import { getWalletInfo } from '../../services/didManager';
 import * as accountManager from '../../services/accountManager';
-import { Send as SendIcon, User, Copy, Check, ChevronDown, ChevronUp } from 'lucide-react-native';
+import { Copy, Check, ChevronDown, ChevronUp } from 'lucide-react-native';
 import * as Clipboard from 'expo-clipboard';
+import { DEFAULT_NETWORK, NETWORK_STORAGE_KEY } from '../../constants/networks';
+import { getTokensForNetwork } from '../../services/tokenService';
 
 export default function TransactionsTab() {
   const { theme, isDark } = useTheme();
+  const router = useRouter();
   
   const [vwBalance, setVwBalance] = useState('0');
-  const [voltBalance, setVoltBalance] = useState('0');
   const [address, setAddress] = useState('');
   const [accountName, setAccountName] = useState('');
   const [accountIndex, setAccountIndex] = useState(0);
   const [accounts, setAccounts] = useState([]);
   const [dropdownOpen, setDropdownOpen] = useState(false);
-  
-  const [recipient, setRecipient] = useState('');
-  const [amount, setAmount] = useState('');
-  const [isSendingToken, setIsSendingToken] = useState(false);
-  
-  const [isLoading, setIsLoading] = useState(false);
+  const [selectedNetwork, setSelectedNetwork] = useState(DEFAULT_NETWORK);
+  const [customTokens, setCustomTokens] = useState([]);
+  const customTokensRef = useRef([]);
+  const [tokenBalances, setTokenBalances] = useState({});
   const [isFetchingBalance, setIsFetchingBalance] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [isFocused, setIsFocused] = useState(true);
-  const pollIntervalRef = useRef(null);
   const previousVwBalanceRef = useRef('0');
-  const previousVoltBalanceRef = useRef('0');
   const isInitialLoadRef = useRef(true);
   const suppressNotificationsRef = useRef(false);
   const highlightAnimation = useRef(new Animated.Value(0)).current;
+
+  const loadSelectedNetwork = useCallback(async () => {
+    try {
+      const stored = await AsyncStorage.getItem(NETWORK_STORAGE_KEY);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (parsed?.id) {
+          setSelectedNetwork(parsed);
+          return;
+        }
+      }
+      setSelectedNetwork(DEFAULT_NETWORK);
+    } catch (error) {
+      console.warn('Failed to load network selection', error);
+      setSelectedNetwork(DEFAULT_NETWORK);
+    }
+  }, []);
+
+  useEffect(() => {
+    customTokensRef.current = customTokens;
+  }, [customTokens]);
+
+  const fetchTokenBalances = useCallback(
+    async (tokensOverride) => {
+      if (!selectedNetwork?.id) {
+        setTokenBalances({});
+        return;
+      }
+      const list = tokensOverride || customTokensRef.current;
+      if (!list.length) {
+        setTokenBalances({});
+        return;
+      }
+      try {
+        const entries = await Promise.all(
+          list.map(async (token) => {
+            const balance = await getTokenBalanceByAddress(token.address, token.decimals);
+            return [token.address, balance];
+          })
+        );
+        setTokenBalances(Object.fromEntries(entries));
+      } catch (error) {
+        console.warn('Failed to load token balances', error);
+      }
+    },
+    [selectedNetwork?.id]
+  );
+
+  const loadCustomTokens = useCallback(async () => {
+    if (!selectedNetwork?.id) {
+      setCustomTokens([]);
+      setTokenBalances({});
+      return;
+    }
+    try {
+      const stored = await getTokensForNetwork(selectedNetwork.id);
+      const normalized = stored.map((token) => ({
+        ...token,
+        address: token.address?.toLowerCase() || token.address,
+      }));
+      const current = customTokensRef.current;
+      const hasChange =
+        normalized.length !== current.length ||
+        normalized.some(
+          (token, index) =>
+            token.address !== current[index]?.address ||
+            token.symbol !== current[index]?.symbol ||
+            token.decimals !== current[index]?.decimals
+        );
+      if (hasChange) {
+        setCustomTokens(normalized);
+      }
+      await fetchTokenBalances(normalized);
+    } catch (error) {
+      console.warn('Failed to load custom tokens', error);
+      setCustomTokens([]);
+      setTokenBalances({});
+    }
+  }, [selectedNetwork?.id, fetchTokenBalances]);
+
+  useEffect(() => {
+    loadCustomTokens();
+  }, [loadCustomTokens]);
 
   // Function to show received funds notification
   const showReceivedNotification = useCallback((amount, asset) => {
@@ -106,28 +188,17 @@ export default function TransactionsTab() {
       if (currentAddress) {
         setAddress(currentAddress);
         setAccountName(currentAccountName);
-        const [vwBal, voltBal] = await Promise.all([
-          getVwBalance(), // Get native VW balance from Geth network (uses active account)
-          getTokenBalance('VOLT') // Get token balance (uses active account)
-        ]);
+        const vwBal = await getVwBalance(); // Get native balance on selected network
 
         // Check for balance increases (only after initial load and not suppressed)
         if (!isInitialLoadRef.current && !suppressNotificationsRef.current) {
           const prevVw = parseFloat(previousVwBalanceRef.current) || 0;
-          const prevVolt = parseFloat(previousVoltBalanceRef.current) || 0;
           const newVw = parseFloat(vwBal) || 0;
-          const newVolt = parseFloat(voltBal) || 0;
 
           // Check if VW balance increased
           if (newVw > prevVw + 0.0001) { // Small threshold to avoid floating point issues
             const received = (newVw - prevVw).toFixed(4);
             showReceivedNotification(received, 'VW');
-          }
-
-          // Check if VOLT balance increased
-          if (newVolt > prevVolt + 0.01) { // Small threshold for tokens
-            const received = (newVolt - prevVolt).toFixed(2);
-            showReceivedNotification(received, 'VOLT');
           }
         } else if (isInitialLoadRef.current) {
           // Mark initial load as complete
@@ -136,64 +207,49 @@ export default function TransactionsTab() {
 
         // Update balances and previous balances
         setVwBalance(vwBal);
-        setVoltBalance(voltBal);
         previousVwBalanceRef.current = vwBal;
-        previousVoltBalanceRef.current = voltBal;
+        await fetchTokenBalances();
       }
     } catch (error) {
       console.error('Failed to load wallet data:', error);
     } finally {
       setIsFetchingBalance(false);
-      setRefreshing(false);
     }
-  }, [showReceivedNotification]);
+  }, [showReceivedNotification, fetchTokenBalances]);
 
-  // Auto-refresh when tab is focused
+  // Refresh when tab is focused
   useFocusEffect(
     useCallback(() => {
-      setIsFocused(true);
-      // Reset initial load flag when tab gains focus
       isInitialLoadRef.current = true;
       loadWalletData();
-      return () => {
-        setIsFocused(false);
-      };
-    }, [loadWalletData])
+      loadSelectedNetwork();
+      loadCustomTokens();
+    }, [loadWalletData, loadSelectedNetwork, loadCustomTokens])
   );
-
-  // Polling mechanism - check balances every 10 seconds when tab is focused
-  useEffect(() => {
-    if (isFocused) {
-      // Clear any existing interval
-      if (pollIntervalRef.current) {
-        clearInterval(pollIntervalRef.current);
-      }
-      
-      // Set up polling every 10 seconds
-      pollIntervalRef.current = setInterval(() => {
-        loadWalletData(true); // Silent refresh (no loading indicator)
-      }, 10000); // 10 seconds
-    } else {
-      // Clear interval when tab loses focus
-      if (pollIntervalRef.current) {
-        clearInterval(pollIntervalRef.current);
-        pollIntervalRef.current = null;
-      }
-    }
-
-    // Cleanup on unmount
-    return () => {
-      if (pollIntervalRef.current) {
-        clearInterval(pollIntervalRef.current);
-      }
-    };
-  }, [isFocused, loadWalletData]);
 
   // Pull-to-refresh handler
   const onRefresh = useCallback(() => {
     setRefreshing(true);
-    loadWalletData();
-  }, [loadWalletData]);
+    (async () => {
+      try {
+        await loadWalletData();
+        await loadSelectedNetwork();
+        await loadCustomTokens();
+      } finally {
+        setRefreshing(false);
+      }
+    })();
+  }, [loadWalletData, loadSelectedNetwork, loadCustomTokens]);
+
+  const handleCopyAddress = useCallback(async (value) => {
+    if (!value) return;
+    try {
+      await Clipboard.setStringAsync(value);
+      Alert.alert('Copied', 'Wallet address copied to clipboard');
+    } catch (error) {
+      console.warn('Failed to copy address', error);
+    }
+  }, []);
 
   const handleSwitchAccount = async (newAccountIndex) => {
     try {
@@ -204,7 +260,6 @@ export default function TransactionsTab() {
       
       // Reset balance tracking for new account
       previousVwBalanceRef.current = '0';
-      previousVoltBalanceRef.current = '0';
       isInitialLoadRef.current = true;
       
       await accountManager.switchAccount(newAccountIndex);
@@ -214,6 +269,7 @@ export default function TransactionsTab() {
       const allAccounts = await accountManager.getAllAccounts();
       setAccounts(allAccounts);
       await loadWalletData();
+      await loadCustomTokens();
       
       // Re-enable notifications after a short delay
       setTimeout(() => {
@@ -228,56 +284,6 @@ export default function TransactionsTab() {
     }
   };
 
-  const handleSend = async () => {
-    if (!recipient || !amount) {
-      Alert.alert('Missing Info', 'Please enter a recipient address and an amount.');
-      return;
-    }
-
-    setIsLoading(true);
-    const asset = isSendingToken ? 'VOLT' : 'VW';
-    Alert.alert(
-      'Confirm Transaction',
-      `Are you sure you want to send ${amount} ${asset} to ${recipient}?`,
-      [
-        { text: 'Cancel', style: 'cancel', onPress: () => setIsLoading(false) },
-        {
-          text: 'Send',
-          onPress: async () => {
-            let result;
-            if (isSendingToken) {
-              result = await sendToken('VOLT', recipient, amount);
-            } else {
-              result = await sendVw(recipient, amount); // Send native VW currency
-            }
-            setIsLoading(false);
-
-            if (result.success) {
-              Alert.alert('Success!', `Transaction confirmed in block ${result.receipt.blockNumber}`);
-              setRecipient('');
-              setAmount('');
-              // Suppress notifications temporarily after sending to prevent false "received" alerts
-              suppressNotificationsRef.current = true;
-              // Refresh balances after a short delay
-              setTimeout(() => {
-                loadWalletData().then(() => {
-                  // Re-enable notifications after balance update
-                  setTimeout(() => {
-                    suppressNotificationsRef.current = false;
-                  }, 1000);
-                });
-              }, 2000); // Wait 2 seconds for transaction to be reflected
-            } else {
-              Alert.alert('Transaction Failed', result.error);
-            }
-          },
-        },
-      ]
-    );
-  };
-
-  const assetToSend = isSendingToken ? 'VOLT' : 'VW';
-
   // Close dropdown when clicking outside
   useEffect(() => {
     if (dropdownOpen) {
@@ -288,9 +294,82 @@ export default function TransactionsTab() {
     }
   }, [dropdownOpen]);
 
+  const nativeSymbol = selectedNetwork?.symbol || 'VW';
+
+  const totalBalanceDisplay = useMemo(() => {
+    const native = parseFloat(vwBalance || '0') || 0;
+    if (!Number.isFinite(native)) {
+      return `0.00 ${nativeSymbol}`;
+    }
+    return `${native.toFixed(4)} ${nativeSymbol}`;
+  }, [vwBalance, nativeSymbol]);
+
+  const formattedVw = useMemo(() => {
+    const value = parseFloat(vwBalance || '0') || 0;
+    return value.toFixed(4);
+  }, [vwBalance]);
+
+  const assetRows = useMemo(() => {
+    const rows = [
+      {
+        id: 'native',
+        symbol: nativeSymbol,
+        name: selectedNetwork?.name || 'Native Asset',
+        value: `${formattedVw} ${nativeSymbol}`,
+        logo: '⟠',
+        isCustom: false,
+      },
+    ];
+    customTokens.forEach((token) => {
+      const balance = tokenBalances[token.address] ?? '0';
+      rows.push({
+        id: token.address,
+        symbol: token.symbol,
+        name: token.name,
+        value: `${balance} ${token.symbol}`,
+        logo: token.logo || '◎',
+        isCustom: true,
+      });
+    });
+    return rows;
+  }, [customTokens, tokenBalances, nativeSymbol, selectedNetwork?.name, formattedVw]);
+
+  const actionButtons = [
+    {
+      key: 'send',
+      label: 'Send',
+      icon: 'arrow-up',
+      color: '#10B981',
+      onPress: () => router.push('/send'),
+    },
+    {
+      key: 'receive',
+      label: 'Receive',
+      icon: 'arrow-down',
+      color: '#3B82F6',
+      onPress: () => router.push('/receive'),
+    },
+    {
+      key: 'swap',
+      label: 'Swap',
+      icon: 'swap-horizontal',
+      color: '#8B5CF6',
+      onPress: () => Alert.alert('Coming soon', 'Swap will be available soon.'),
+    },
+    {
+      key: 'buy',
+      label: 'Buy',
+      icon: 'card',
+      color: '#F59E0B',
+      onPress: () => Alert.alert('Coming soon', 'Fiat on-ramps are coming soon.'),
+    },
+  ];
+
   return (
     <View style={[styles.container, { backgroundColor: theme.background }]}>
-      <ScrollView 
+      <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
+      <ScrollView
+        style={styles.scrollView}
         contentContainerStyle={styles.scrollContent}
         refreshControl={
           <RefreshControl
@@ -301,182 +380,196 @@ export default function TransactionsTab() {
           />
         }
       >
-        <View style={styles.headerSection}>
-          <Text style={[styles.headerTitle, { color: theme.text }]}>Transactions</Text>
-          {accountName && (
-            <View style={styles.dropdownContainer}>
-              <TouchableOpacity
-                style={[styles.accountBadge, { backgroundColor: theme.surface, borderColor: theme.border }]}
-                onPress={() => setDropdownOpen(!dropdownOpen)}
-                onLongPress={async () => {
-                  await Clipboard.setStringAsync(address);
-                  Alert.alert('Copied!', 'Address copied to clipboard');
-                }}
-              >
-                <User size={14} color={theme.primary} />
-                <Text style={[styles.accountBadgeText, { color: theme.text }]} numberOfLines={1}>
-                  {accountName}
+        <View style={styles.headerRegion}>
+          <View style={[styles.header, { backgroundColor: theme.surface, borderColor: theme.border }]}>
+            <TouchableOpacity
+              style={[styles.iconButton, { borderColor: theme.border }]}
+              onPress={() => setDropdownOpen(!dropdownOpen)}
+              activeOpacity={0.8}
+            >
+              <Ionicons name="people-outline" size={22} color={theme.text} />
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.networkSelector, { borderColor: theme.border, backgroundColor: theme.surfaceSecondary || theme.surface }]}
+              onPress={() => router.push('/manage-networks')}
+              activeOpacity={0.85}
+            >
+              <View style={[styles.networkDot, { backgroundColor: theme.primary }]} />
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.networkName, { color: theme.text }]} numberOfLines={1}>
+                  {selectedNetwork?.name || 'Select Network'}
                 </Text>
-                {dropdownOpen ? (
-                  <ChevronUp size={12} color={theme.textTertiary} />
-                ) : (
-                  <ChevronDown size={12} color={theme.textTertiary} />
-                )}
-              </TouchableOpacity>
-              
-              {dropdownOpen && accounts.length > 0 && (
-                <View 
-                  style={[styles.dropdown, { backgroundColor: theme.surface, borderColor: theme.border }]}
-                >
-                  <ScrollView style={styles.dropdownList} nestedScrollEnabled>
-                    {accounts.map((account, idx) => (
-                      <TouchableOpacity
-                        key={account.index}
-                        style={[
-                          styles.dropdownItem,
-                          {
-                            backgroundColor: account.index === accountIndex 
-                              ? (isDark ? 'rgba(6, 182, 212, 0.15)' : 'rgba(6, 182, 212, 0.08)')
+                <Text style={[styles.networkChain, { color: theme.textTertiary }]} numberOfLines={1}>
+                  {selectedNetwork?.chainId ? `Chain ID: ${selectedNetwork.chainId}` : 'Tap to manage'}
+                </Text>
+              </View>
+              <Ionicons name="chevron-down" size={16} color={theme.text} />
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.iconButton, { borderColor: theme.border }]}
+              onPress={() => router.push('/tabs/scan')}
+              activeOpacity={0.8}
+            >
+              <Ionicons name="scan-outline" size={22} color={theme.text} />
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.iconButton, { borderColor: theme.border }]}
+              onPress={() => router.push('/manage-networks')}
+              activeOpacity={0.8}
+            >
+              <Ionicons name="settings-outline" size={22} color={theme.text} />
+            </TouchableOpacity>
+          </View>
+
+          {dropdownOpen && accounts.length > 0 && (
+            <View style={styles.dropdownWrapper}>
+              <View style={[styles.dropdown, { backgroundColor: theme.surface, borderColor: theme.border }]}>
+                <ScrollView style={styles.dropdownList} nestedScrollEnabled>
+                  {accounts.map((account, idx) => (
+                    <TouchableOpacity
+                      key={account.index}
+                      style={[
+                        styles.dropdownItem,
+                        {
+                          backgroundColor:
+                            account.index === accountIndex
+                              ? isDark
+                                ? 'rgba(16, 185, 129, 0.15)'
+                                : 'rgba(16, 185, 129, 0.12)'
                               : 'transparent',
-                            borderBottomWidth: idx < accounts.length - 1 ? 1 : 0,
-                            borderBottomColor: theme.border,
-                          },
-                        ]}
-                        onPress={async () => {
-                          console.log('Account item pressed:', account.index);
-                          if (account.index !== accountIndex) {
-                            await handleSwitchAccount(account.index);
-                          } else {
-                            setDropdownOpen(false);
-                          }
-                        }}
-                        activeOpacity={0.7}
-                      >
-                        <View style={styles.dropdownItemLeft}>
-                          {account.index === accountIndex && (
-                            <Check size={14} color={theme.primary} />
-                          )}
-                          <View style={styles.dropdownItemInfo}>
-                            <Text style={[styles.dropdownItemLabel, { color: theme.text }]}>
-                              {account.label}
-                            </Text>
-                            <Text style={[styles.dropdownItemAddress, { color: theme.textTertiary }]} numberOfLines={1}>
-                              {`${account.address.substring(0, 6)}...${account.address.substring(38)}`}
-                            </Text>
-                          </View>
+                          borderBottomWidth: idx < accounts.length - 1 ? 1 : 0,
+                          borderBottomColor: theme.border,
+                        },
+                      ]}
+                      onPress={async () => {
+                        if (account.index !== accountIndex) {
+                          await handleSwitchAccount(account.index);
+                        } else {
+                          setDropdownOpen(false);
+                        }
+                      }}
+                      activeOpacity={0.8}
+                    >
+                      <View style={styles.dropdownItemLeft}>
+                        {account.index === accountIndex && <Check size={14} color={theme.primary} />}
+                        <View style={styles.dropdownItemInfo}>
+                          <Text style={[styles.dropdownItemLabel, { color: theme.text }]}>{account.label}</Text>
+                          <Text style={[styles.dropdownItemAddress, { color: theme.textTertiary }]} numberOfLines={1}>
+                            {`${account.address.substring(0, 6)}...${account.address.substring(38)}`}
+                          </Text>
                         </View>
-                        {account.index === accountIndex && (
-                          <View style={[styles.activeBadgeSmall, { backgroundColor: theme.primary }]}>
-                            <Text style={styles.activeBadgeSmallText}>Active</Text>
-                          </View>
-                        )}
-                      </TouchableOpacity>
-                    ))}
-                  </ScrollView>
-                </View>
-              )}
+                      </View>
+                      {account.index === accountIndex && (
+                        <View style={[styles.activeBadgeSmall, { backgroundColor: theme.primary }]}>
+                          <Text style={styles.activeBadgeSmallText}>Active</Text>
+                        </View>
+                      )}
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+              </View>
             </View>
           )}
         </View>
-        
-        <View style={[styles.balanceCard, { backgroundColor: theme.surface, borderColor: theme.border }]}>
+
+        <View style={[styles.balanceCard, { backgroundColor: theme.primary }]}>
           <Animated.View
+            pointerEvents="none"
             style={[
               StyleSheet.absoluteFill,
               {
-                backgroundColor: theme.primary,
+                backgroundColor: '#FFFFFF20',
                 opacity: highlightAnimation.interpolate({
                   inputRange: [0, 1],
-                  outputRange: [0, 0.15],
+                  outputRange: [0, 1],
                 }),
-                borderRadius: 18,
-              }
+                borderRadius: 24,
+              },
             ]}
           />
-          <View style={styles.balanceHeader}>
-            <Text style={[styles.balanceLabel, { color: theme.textSecondary }]}>Your Balances</Text>
-            {accountName && (
-              <View style={[styles.accountIndicator, { backgroundColor: theme.primary + '15' }]}>
-                <Check size={12} color={theme.primary} />
-                <Text style={[styles.accountIndicatorText, { color: theme.primary }]} numberOfLines={1}>
-                  {accountName}
-                </Text>
-              </View>
-            )}
-          </View>
+          <Text style={styles.balanceLabel}>Total Balance</Text>
           {isFetchingBalance ? (
-            <ActivityIndicator color={theme.primary} style={{ marginVertical: 20 }} />
+            <ActivityIndicator color="#FFFFFF" style={{ marginVertical: 20 }} />
           ) : (
             <>
-              <View style={styles.balanceRow}>
-                <Text style={[styles.balanceAmount, { color: theme.text }]}>{parseFloat(vwBalance).toFixed(4)}</Text>
-                <Text style={[styles.balanceSymbol, { color: theme.textSecondary }]}>VW</Text>
-              </View>
-              <View style={styles.balanceRow}>
-                <Text style={[styles.balanceAmount, { color: theme.text }]}>{parseFloat(voltBalance).toFixed(2)}</Text>
-                <Text style={[styles.balanceSymbol, { color: theme.textSecondary }]}>VOLT</Text>
-              </View>
+              <Text style={styles.balanceAmount}>{totalBalanceDisplay}</Text>
+              <Text style={styles.balanceSubtext}>
+                {assetRows.length} asset{assetRows.length === 1 ? '' : 's'} tracked
+              </Text>
             </>
           )}
-          <TouchableOpacity
-            onPress={async () => {
-              await Clipboard.setStringAsync(address);
-              Alert.alert('Copied!', 'Address copied to clipboard');
-            }}
-            style={[styles.addressContainer, { borderTopColor: theme.border }]}
-          >
-            <Text style={[styles.address, { color: theme.textTertiary }]} numberOfLines={1}>
-              {address ? `${address.substring(0, 6)}...${address.substring(38)}` : 'Loading...'}
-            </Text>
-            <Copy size={14} color={theme.textTertiary} />
-          </TouchableOpacity>
+          <View style={styles.actionButtons}>
+            {actionButtons.map((action) => (
+              <TouchableOpacity key={action.key} style={styles.actionButton} onPress={action.onPress} activeOpacity={0.85}>
+                <View style={[styles.actionIcon, { backgroundColor: action.color }]}>
+                  <Ionicons name={action.icon} size={20} color="#fff" />
+                </View>
+                <Text style={styles.actionText}>{action.label}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
         </View>
 
-        <View style={[styles.sendCard, { backgroundColor: theme.surface, borderColor: theme.border }]}>
-          <View style={styles.sendHeader}>
-            <Text style={[styles.sendTitle, { color: theme.text }]}>Send</Text>
-            <View style={styles.toggleContainer}>
-              <Text style={[styles.toggleLabel, { color: !isSendingToken ? theme.primary : theme.textTertiary }]}>VW</Text>
-              <Switch
-                trackColor={{ false: theme.primaryLight, true: theme.accent }}
-                thumbColor={"#FFFFFF"}
-                onValueChange={() => setIsSendingToken(prev => !prev)}
-                value={isSendingToken}
-              />
-              <Text style={[styles.toggleLabel, { color: isSendingToken ? theme.accent : theme.textTertiary }]}>VOLT</Text>
-            </View>
+        <TouchableOpacity
+          style={[styles.addressCard, { backgroundColor: theme.surface, borderColor: theme.border }]}
+          onPress={() => handleCopyAddress(address)}
+          disabled={!address}
+        >
+          <View>
+            <Text style={[styles.addressLabel, { color: theme.textSecondary }]}>Wallet Address</Text>
+            <Text style={[styles.addressValue, { color: theme.text }]} numberOfLines={1}>
+              {address ? `${address.substring(0, 10)}...${address.substring(address.length - 8)}` : 'Loading...'}
+            </Text>
           </View>
-          
-          <TextInput
-            style={[styles.input, { color: theme.text, borderColor: theme.border }]}
-            placeholder="Recipient Address (0x...)"
-            placeholderTextColor={theme.textTertiary}
-            value={recipient}
-            onChangeText={setRecipient}
-            autoCapitalize="none"
-          />
-          <TextInput
-            style={[styles.input, { color: theme.text, borderColor: theme.border }]}
-            placeholder={`Amount in ${assetToSend}`}
-            placeholderTextColor={theme.textTertiary}
-            value={amount}
-            onChangeText={setAmount}
-            keyboardType="numeric"
-          />
-          <TouchableOpacity
-            style={[styles.sendButton, { backgroundColor: isSendingToken ? theme.accent : theme.primary }]}
-            onPress={handleSend}
-            disabled={isLoading}
-          >
-            {isLoading ? (
-              <ActivityIndicator color="#FFFFFF" />
-            ) : (
-              <>
-                <SendIcon color="#FFFFFF" size={18} />
-                <Text style={styles.sendButtonText}>Send {assetToSend}</Text>
-              </>
-            )}
-          </TouchableOpacity>
+          <Copy size={18} color={theme.text} />
+        </TouchableOpacity>
+
+        <View style={[styles.section, { backgroundColor: theme.surface }]}>
+          <View style={styles.sectionHeader}>
+            <Text style={[styles.sectionTitle, { color: theme.text }]}>Your Assets</Text>
+            <TouchableOpacity onPress={() => router.push('/add-custom-token')} hitSlop={10}>
+              <Ionicons name="add-circle" size={26} color={theme.primary} />
+            </TouchableOpacity>
+          </View>
+
+          <View style={[styles.tokenList, { borderColor: theme.border, backgroundColor: theme.surfaceSecondary || theme.surface }]}>
+            {assetRows.map((token, index) => (
+              <TouchableOpacity
+                key={token.id}
+                style={[
+                  styles.tokenItem,
+                  {
+                    borderBottomWidth: index < assetRows.length - 1 ? 1 : 0,
+                    borderBottomColor: theme.border,
+                  },
+                ]}
+                activeOpacity={0.85}
+              >
+                <View style={styles.tokenLeft}>
+                  <View style={styles.tokenLogo}>
+                    <Text style={styles.tokenLogoText}>{token.logo}</Text>
+                  </View>
+                  <View>
+                    <Text style={[styles.tokenSymbol, { color: theme.text }]}>{token.symbol}</Text>
+                    <Text style={[styles.tokenName, { color: theme.textTertiary }]}>{token.name}</Text>
+                  </View>
+                </View>
+                <View style={styles.tokenRight}>
+                  <Text style={[styles.tokenValue, { color: theme.text }]}>{token.value}</Text>
+                  <View
+                    style={[
+                      styles.tokenTag,
+                      token.isCustom ? styles.tokenTagCustom : styles.tokenTagNative,
+                    ]}
+                  >
+                    <Text style={styles.tokenTagText}>{token.isCustom ? 'Custom' : 'Native'}</Text>
+                  </View>
+                </View>
+              </TouchableOpacity>
+            ))}
+          </View>
         </View>
       </ScrollView>
     </View>
@@ -484,66 +577,86 @@ export default function TransactionsTab() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1 },
-  scrollContent: { padding: 20, paddingBottom: 40 },
-  headerSection: {
+  container: {
+    flex: 1,
+  },
+  scrollView: {
+    flex: 1,
+  },
+  scrollContent: {
+    paddingHorizontal: 20,
+    paddingBottom: 56,
+  },
+  headerRegion: {
+    paddingTop: 52,
+    marginBottom: 16,
+  },
+  header: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 20,
-    paddingTop: 40,
     gap: 12,
+    padding: 12,
+    borderRadius: 24,
+    borderWidth: 1,
   },
-  headerTitle: { 
-    fontSize: 28, 
-    fontWeight: 'bold', 
+  iconButton: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+  },
+  networkSelector: {
     flex: 1,
-  },
-  dropdownContainer: {
-    position: 'relative',
-    maxWidth: '45%',
-    zIndex: 1000,
-    elevation: 1000,
-  },
-  accountBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 12,
+    borderRadius: 20,
     borderWidth: 1,
-    width: '100%',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    gap: 10,
   },
-  accountBadgeText: {
-    fontSize: 13,
+  networkDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+  },
+  networkName: {
+    fontSize: 15,
     fontWeight: '600',
-    flex: 1,
+  },
+  networkChain: {
+    fontSize: 12,
+    fontWeight: '500',
+  },
+  dropdownWrapper: {
+    position: 'absolute',
+    top: 94,
+    left: 0,
+    right: 0,
+    paddingHorizontal: 20,
+    zIndex: 20,
   },
   dropdown: {
-    position: 'absolute',
-    top: '100%',
-    right: 0,
-    marginTop: 8,
-    borderRadius: 12,
+    borderRadius: 18,
     borderWidth: 1,
-    maxHeight: 300,
-    minWidth: 280,
+    maxHeight: 280,
+    overflow: 'hidden',
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 1001,
-    zIndex: 1001,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.25,
+    shadowRadius: 16,
+    elevation: 10,
   },
   dropdownList: {
-    maxHeight: 300,
+    maxHeight: 280,
   },
   dropdownItem: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    padding: 12,
+    paddingVertical: 12,
     paddingHorizontal: 16,
   },
   dropdownItemLeft: {
@@ -567,121 +680,150 @@ const styles = StyleSheet.create({
   activeBadgeSmall: {
     paddingHorizontal: 8,
     paddingVertical: 3,
-    borderRadius: 8,
+    borderRadius: 999,
   },
   activeBadgeSmallText: {
     color: '#FFFFFF',
     fontSize: 10,
     fontWeight: '700',
   },
-  balanceCard: { 
-    padding: 20, 
-    borderRadius: 18, 
-    marginBottom: 24, 
-    gap: 16, 
-    overflow: 'hidden', 
-    position: 'relative',
-    borderWidth: 1,
+  balanceCard: {
+    borderRadius: 24,
+    padding: 24,
+    gap: 8,
+    marginTop: 40,
+    overflow: 'hidden',
   },
-  balanceHeader: {
+  balanceLabel: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    opacity: 0.9,
+  },
+  balanceAmount: {
+    color: '#FFFFFF',
+    fontSize: 38,
+    fontWeight: 'bold',
+    marginTop: 4,
+  },
+  balanceSubtext: {
+    color: '#FFFFFF',
+    opacity: 0.85,
+    fontSize: 14,
+    marginBottom: 8,
+  },
+  actionButtons: {
     flexDirection: 'row',
     justifyContent: 'space-between',
+    marginTop: 12,
+  },
+  actionButton: {
     alignItems: 'center',
-    zIndex: 1,
+    width: 64,
   },
-  balanceRow: { 
-    flexDirection: 'row', 
-    alignItems: 'flex-end', 
-    gap: 8, 
-    zIndex: 1 
+  actionIcon: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 8,
   },
-  balanceAmount: { 
-    fontSize: 32, 
-    fontWeight: 'bold', 
-    lineHeight: 36, 
-    zIndex: 1 
+  actionText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '600',
   },
-  balanceSymbol: { 
-    fontSize: 16, 
-    paddingBottom: 4, 
-    fontWeight: '600', 
-    zIndex: 1 
-  },
-  balanceLabel: { 
-    fontSize: 16, 
-    fontWeight: '600', 
-    zIndex: 1 
-  },
-  accountIndicator: {
+  addressCard: {
+    marginTop: 24,
+    padding: 20,
+    borderRadius: 20,
+    borderWidth: 1,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 8,
+    justifyContent: 'space-between',
   },
-  accountIndicatorText: {
+  addressLabel: {
+    fontSize: 12,
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+  },
+  addressValue: {
+    fontSize: 16,
+    fontWeight: '600',
+    marginTop: 4,
+  },
+  section: {
+    marginTop: 28,
+    borderRadius: 24,
+    padding: 20,
+  },
+  sectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 12,
+  },
+  sectionTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+  },
+  tokenList: {
+    borderRadius: 20,
+    borderWidth: 1,
+    overflow: 'hidden',
+  },
+  tokenItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: 16,
+  },
+  tokenLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  tokenLogo: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  tokenLogoText: {
+    fontSize: 22,
+  },
+  tokenSymbol: {
+    fontSize: 16,
+    fontWeight: '700',
+    marginBottom: 2,
+  },
+  tokenName: {
+    fontSize: 12,
+  },
+  tokenRight: {
+    alignItems: 'flex-end',
+  },
+  tokenValue: {
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  tokenTag: {
+    marginTop: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 999,
+  },
+  tokenTagText: {
+    color: '#FFFFFF',
     fontSize: 11,
     fontWeight: '600',
-    maxWidth: 100,
   },
-  addressContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    marginTop: 4,
-    paddingTop: 12,
-    borderTopWidth: 1,
-    zIndex: 1,
+  tokenTagNative: {
+    backgroundColor: '#475569',
   },
-  address: { 
-    fontSize: 12, 
-    fontFamily: 'monospace', 
-    flex: 1,
-  },
-  sendCard: { 
-    padding: 20, 
-    borderRadius: 18,
-    borderWidth: 1,
-  },
-  sendHeader: { 
-    flexDirection: 'row', 
-    justifyContent: 'space-between', 
-    alignItems: 'center', 
-    marginBottom: 16 
-  },
-  sendTitle: { 
-    fontSize: 20, 
-    fontWeight: 'bold' 
-  },
-  toggleContainer: { 
-    flexDirection: 'row', 
-    alignItems: 'center', 
-    gap: 8 
-  },
-  toggleLabel: { 
-    fontSize: 14, 
-    fontWeight: '600' 
-  },
-  input: { 
-    height: 50, 
-    borderWidth: 1, 
-    borderRadius: 12, 
-    paddingHorizontal: 15, 
-    fontSize: 16, 
-    marginBottom: 12 
-  },
-  sendButton: { 
-    height: 50, 
-    borderRadius: 12, 
-    justifyContent: 'center', 
-    alignItems: 'center', 
-    flexDirection: 'row', 
-    gap: 8 
-  },
-  sendButtonText: { 
-    color: '#FFFFFF', 
-    fontSize: 18, 
-    fontWeight: 'bold' 
+  tokenTagCustom: {
+    backgroundColor: '#10B981',
   },
 });

@@ -5,13 +5,35 @@
 import { ethers } from 'ethers';
 import * as secureStorage from './secureStorage';
 import * as accountManager from './accountManager';
-import API_CONFIG from '../config/config';
-import { TOKENS } from '../config/contracts';
+import { ERC20_ABI } from '../config/contracts';
 import logger from '../utils/logger';
+import { getSelectedNetwork } from './networkService';
 
-export const getProvider = () => {
+let cachedProvider = null;
+let cachedRpcUrl = null;
+let cachedChainId = null;
+
+export const resetProviderCache = () => {
+  cachedProvider = null;
+  cachedRpcUrl = null;
+  cachedChainId = null;
+};
+
+export const getProvider = async () => {
   try {
-    return new ethers.JsonRpcProvider(API_CONFIG.BLOCKCHAIN_URL);
+    const network = await getSelectedNetwork();
+    if (!network?.rpcUrl) {
+      throw new Error('Network RPC endpoint is not configured.');
+    }
+
+    if (cachedProvider && cachedRpcUrl === network.rpcUrl && cachedChainId === network.chainId) {
+      return cachedProvider;
+    }
+
+    cachedRpcUrl = network.rpcUrl;
+    cachedChainId = network.chainId;
+    cachedProvider = new ethers.JsonRpcProvider(network.rpcUrl, network.chainId ? Number(network.chainId) : undefined);
+    return cachedProvider;
   } catch (error) {
     logger.error('Failed to get blockchain provider:', error);
     throw new Error('Could not connect to the blockchain network.');
@@ -25,15 +47,16 @@ export const getWallet = async () => {
     // Fallback to legacy storage for backward compatibility
     const legacyKey = await secureStorage.getPrivateKey();
     if (!legacyKey) throw new Error('Wallet not initialized.');
-    return new ethers.Wallet(legacyKey, getProvider());
+    return new ethers.Wallet(legacyKey, await getProvider());
   }
-  return new ethers.Wallet(privateKey, getProvider());
+  return new ethers.Wallet(privateKey, await getProvider());
 };
 
 export const getVwBalance = async () => {
   try {
     const wallet = await getWallet();
-    const balance = await getProvider().getBalance(wallet.address);
+    const provider = await getProvider();
+    const balance = await provider.getBalance(wallet.address);
     // formatEther converts wei to VW (native currency on this Geth network)
     return ethers.formatEther(balance);
   } catch (error) {
@@ -42,20 +65,41 @@ export const getVwBalance = async () => {
   }
 };
 
-const getErc20Contract = (tokenSymbol) => {
-  const token = TOKENS[tokenSymbol];
-  if (!token) throw new Error(`Token ${tokenSymbol} not configured.`);
-  return new ethers.Contract(token.address, token.abi, getProvider());
+const getErc20Contract = (address, provider) => {
+  if (!address) throw new Error('Token address missing.');
+  return new ethers.Contract(address, ERC20_ABI, provider);
 };
 
-export const getTokenBalance = async (tokenSymbol) => {
+export const getTokenMetadata = async (address) => {
+  try {
+    const provider = await getProvider();
+    const contract = getErc20Contract(address, provider);
+    const [name, symbol, decimals] = await Promise.all([
+      contract.name().catch(() => null),
+      contract.symbol().catch(() => null),
+      contract.decimals().catch(() => 18),
+    ]);
+    return {
+      address: address.toLowerCase(),
+      name: name || symbol || 'Unknown Token',
+      symbol: symbol || 'TKN',
+      decimals: Number(decimals) || 18,
+    };
+  } catch (error) {
+    logger.error(`Failed to fetch token metadata for ${address}:`, error);
+    throw new Error(error?.message || 'Unable to fetch token metadata.');
+  }
+};
+
+export const getTokenBalanceByAddress = async (address, decimals = 18) => {
   try {
     const wallet = await getWallet();
-    const contract = getErc20Contract(tokenSymbol);
+    const provider = await getProvider();
+    const contract = getErc20Contract(address, provider);
     const balance = await contract.balanceOf(wallet.address);
-    return ethers.formatUnits(balance, TOKENS[tokenSymbol].decimals);
+    return ethers.formatUnits(balance, decimals);
   } catch (error) {
-    logger.error(`Failed to get ${tokenSymbol} balance:`, error);
+    logger.error(`Failed to get token balance for ${address}:`, error);
     return '0';
   }
 };
@@ -78,15 +122,13 @@ export const sendVw = async (toAddress, amountInVw) => {
   }
 };
 
-export const sendToken = async (tokenSymbol, toAddress, amountInTokens) => {
+export const sendTokenByAddress = async (address, decimals, toAddress, amountInTokens) => {
   try {
     if (!ethers.isAddress(toAddress)) throw new Error('Invalid recipient address.');
     const wallet = await getWallet();
-    const token = TOKENS[tokenSymbol];
-    if (!token) throw new Error(`Token ${tokenSymbol} not configured.`);
-    
-    const contract = getErc20Contract(tokenSymbol).connect(wallet);
-    const amount = ethers.parseUnits(amountInTokens, token.decimals);
+    const provider = await getProvider();
+    const contract = getErc20Contract(address, provider).connect(wallet);
+    const amount = ethers.parseUnits(amountInTokens, decimals);
     
     const txResponse = await contract.transfer(toAddress, amount);
     const receipt = await txResponse.wait();
