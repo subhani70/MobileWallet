@@ -1,7 +1,7 @@
 // app/tabs/index.js
 // SSI Wallet Dashboard - Matching Mock Design
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import {
   View,
   Text,
@@ -33,11 +33,14 @@ import * as secureStorage from '../../services/secureStorage';
 import * as didManager from '../../services/didManager';
 import logger from '../../utils/logger';
 import 'react-native-get-random-values';
+import { useTheme } from '../../contexts/ThemeContext';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
 export default function WalletDashboard() {
   const router = useRouter();
+  const { theme } = useTheme();
+  const styles = useMemo(() => createStyles(theme), [theme]);
   const [refreshing, setRefreshing] = useState(false);
   const [didExpanded, setDidExpanded] = useState(false);
   const [hasWallet, setHasWallet] = useState(false);
@@ -245,11 +248,13 @@ export default function WalletDashboard() {
           <RefreshControl
             refreshing={refreshing}
             onRefresh={onRefresh}
-            tintColor="#06B6D4"
+            tintColor={theme.primary}
+            colors={[theme.primary]}
           />
         }
       >
         <GradientHeader
+          styles={styles}
           didExpanded={didExpanded}
           onToggleDID={() => setDidExpanded(!didExpanded)}
           onCopyDID={handleCopyDID}
@@ -260,20 +265,23 @@ export default function WalletDashboard() {
         <View style={styles.content}>
           {hasWallet && (
             <>
-              <QuickStats stats={stats} />
-              <QuickActions router={router} />
+              <QuickStats stats={stats} styles={styles} />
+              <QuickActions router={router} styles={styles} />
               {stats.pending > 0 && (
                 <PendingAlert 
+                  styles={styles}
                   count={stats.pending} 
                   onPress={() => router.push('/credential-offer')} 
                 />
               )}
               <CredentialsSection
+                styles={styles}
                 credentials={credentials}
                 onViewAll={() => router.push('/tabs/credentials')}
                 router={router}
               />
               <ActivitySection
+                styles={styles}
                 activity={activity}
                 onViewAll={() => router.push('/activity')}
               />
@@ -296,6 +304,7 @@ function GradientHeader({
   onCopyDID,
   onNotificationPress,
   walletInfo,
+  styles,
 }) {
   return (
     <LinearGradient
@@ -352,20 +361,23 @@ function GradientHeader({
   );
 }
 
-function QuickStats({ stats }) {
+function QuickStats({ stats, styles }) {
   return (
     <View style={styles.statsContainer}>
       <StatCard
+        styles={styles}
         icon={<FileText color="#06B6D4" size={32} />}
         number={stats.total}
         label="Credentials"
       />
       <StatCard
+        styles={styles}
         icon={<Share2 color="#8B5CF6" size={32} />}
         number={stats.shared}
         label="Times Shared"
       />
       <StatCard
+        styles={styles}
         icon={<Clock color="#F59E0B" size={32} />}
         number={stats.pending}
         label="Pending"
@@ -375,7 +387,7 @@ function QuickStats({ stats }) {
   );
 }
 
-function StatCard({ icon, number, label, badge }) {
+function StatCard({ icon, number, label, badge, styles }) {
   const scaleAnim = useRef(new Animated.Value(1)).current;
 
   const handlePressIn = () => {
@@ -410,7 +422,7 @@ function StatCard({ icon, number, label, badge }) {
   );
 }
 
-function QuickActions({ router }) {
+function QuickActions({ router, styles }) {
   return (
     <View style={styles.quickActionsSection}>
       <Text style={styles.sectionTitle}>Quick Actions</Text>
@@ -420,18 +432,21 @@ function QuickActions({ router }) {
         contentContainerStyle={styles.actionsContainer}
       >
         <QuickActionButton
+          styles={styles}
           icon={<Share2 color="#FFFFFF" size={32} />}
           label="Share Credential"
           gradient={['#06B6D4', '#0891B2']}
           onPress={() => router.push('/share')}
         />
         <QuickActionButton
+          styles={styles}
           icon={<QrCode color="#FFFFFF" size={32} />}
           label="Scan QR"
           gradient={['#8B5CF6', '#7C3AED']}
           onPress={() => router.push('/tabs/scan')}
         />
         <QuickActionButton
+          styles={styles}
           icon={<Download color="#06B6D4" size={32} />}
           label="Receive"
           outline
@@ -448,6 +463,7 @@ function QuickActionButton({
   gradient,
   outline,
   onPress,
+  styles,
 }) {
   const scaleAnim = useRef(new Animated.Value(1)).current;
 
@@ -508,7 +524,7 @@ function QuickActionButton({
   );
 }
 
-function PendingAlert({ count, onPress }) {
+function PendingAlert({ count, onPress, styles }) {
   return (
     <TouchableOpacity style={styles.pendingAlert} onPress={onPress}>
       <AlertCircle color="#F59E0B" size={24} />
@@ -524,6 +540,7 @@ function CredentialsSection({
   credentials,
   onViewAll,
   router,
+  styles,
 }) {
   return (
     <View style={styles.section}>
@@ -535,7 +552,7 @@ function CredentialsSection({
       </View>
       <View style={styles.credentialsList}>
         {credentials.slice(0, 3).map((credential) => (
-          <CredentialCard key={credential.id} credential={credential} router={router} />
+          <CredentialCard key={credential.id} credential={credential} router={router} styles={styles} />
         ))}
         {credentials.length === 0 && (
           <View style={styles.emptyState}>
@@ -551,7 +568,7 @@ function CredentialsSection({
   );
 }
 
-function CredentialCard({ credential, router }) {
+function CredentialCard({ credential, router, styles }) {
   const scaleAnim = useRef(new Animated.Value(1)).current;
 
   const handlePressIn = () => {
@@ -612,6 +629,7 @@ function CredentialCard({ credential, router }) {
 function ActivitySection({
   activity,
   onViewAll,
+  styles,
 }) {
   return (
     <View style={[styles.section, styles.activitySection]}>
@@ -627,6 +645,7 @@ function ActivitySection({
             key={item.id}
             activity={item}
             isLast={index === activity.length - 1}
+            styles={styles}
           />
         ))}
         {activity.length === 0 && (
@@ -643,7 +662,7 @@ function ActivitySection({
   );
 }
 
-function ActivityItem({ activity, isLast }) {
+function ActivityItem({ activity, isLast, styles }) {
   const getIconAndColor = () => {
     switch (activity.type) {
       case 'received':
@@ -676,10 +695,10 @@ function ActivityItem({ activity, isLast }) {
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = (theme) => StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#0F172A',
+    backgroundColor: theme.background,
   },
   scrollView: {
     flex: 1,
@@ -798,9 +817,9 @@ const styles = StyleSheet.create({
   },
   statCard: {
     flex: 1,
-    backgroundColor: '#1E293B',
+    backgroundColor: theme.card,
     borderRadius: 16,
-    shadowColor: '#06B6D4',
+    shadowColor: theme.shadow,
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.2,
     shadowRadius: 12,
@@ -823,11 +842,11 @@ const styles = StyleSheet.create({
   statNumber: {
     fontSize: 32,
     fontWeight: 'bold',
-    color: '#F1F5F9',
+    color: theme.text,
   },
   statLabel: {
     fontSize: 14,
-    color: '#94A3B8',
+    color: theme.textSecondary,
   },
   quickActionsSection: {
     marginTop: 24,
@@ -835,7 +854,7 @@ const styles = StyleSheet.create({
   sectionTitle: {
     fontSize: 20,
     fontWeight: '600',
-    color: '#F1F5F9',
+    color: theme.text,
     marginBottom: 12,
     paddingHorizontal: 16,
   },
@@ -872,16 +891,16 @@ const styles = StyleSheet.create({
     width: 160,
     height: 88,
     borderRadius: 16,
-    backgroundColor: '#1E293B',
+    backgroundColor: theme.card,
     borderWidth: 2,
-    borderColor: '#06B6D4',
+    borderColor: theme.primary,
     justifyContent: 'center',
     alignItems: 'center',
   },
   actionLabelOutline: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#06B6D4',
+    color: theme.primary,
     marginTop: 8,
   },
   pendingAlert: {
@@ -900,12 +919,12 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 16,
     fontWeight: '500',
-    color: '#F1F5F9',
+    color: theme.text,
   },
   pendingButton: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#06B6D4',
+    color: theme.primary,
   },
   section: {
     marginTop: 24,
@@ -920,7 +939,7 @@ const styles = StyleSheet.create({
   viewAllLink: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#06B6D4',
+    color: theme.primary,
   },
   credentialsList: {
     paddingHorizontal: 16,
@@ -933,9 +952,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     borderRadius: 16,
     borderTopWidth: 4,
-    backgroundColor: '#1E293B',
+    backgroundColor: theme.surface,
     padding: 16,
-    shadowColor: '#06B6D4',
+    shadowColor: theme.shadow,
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.2,
     shadowRadius: 8,
@@ -946,7 +965,7 @@ const styles = StyleSheet.create({
     width: 56,
     height: 56,
     borderRadius: 28,
-    backgroundColor: '#334155',
+    backgroundColor: theme.surfaceSecondary,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -960,19 +979,19 @@ const styles = StyleSheet.create({
   credentialTitle: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#F1F5F9',
+    color: theme.text,
   },
   credentialSubtitle: {
     fontSize: 14,
-    color: '#64748B',
+    color: theme.textTertiary,
   },
   credentialInstitution: {
     fontSize: 12,
-    color: '#64748B',
+    color: theme.textTertiary,
   },
   credentialDate: {
     fontSize: 12,
-    color: '#64748B',
+    color: theme.textTertiary,
   },
   credentialRight: {
     alignItems: 'flex-end',
@@ -990,7 +1009,7 @@ const styles = StyleSheet.create({
   verifiedText: {
     fontSize: 10,
     fontWeight: '600',
-    color: '#10B981',
+    color: theme.success,
   },
   activitySection: {
     marginBottom: 40,
@@ -1017,7 +1036,7 @@ const styles = StyleSheet.create({
   timelineLine: {
     flex: 1,
     width: 2,
-    backgroundColor: '#334155',
+    backgroundColor: theme.border,
     marginTop: 4,
   },
   activityContent: {
@@ -1028,15 +1047,15 @@ const styles = StyleSheet.create({
   activityTitle: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#F1F5F9',
+    color: theme.text,
   },
   activityDetail: {
     fontSize: 14,
-    color: '#94A3B8',
+    color: theme.textSecondary,
   },
   activityTime: {
     fontSize: 12,
-    color: '#64748B',
+    color: theme.textTertiary,
     marginTop: 4,
   },
   emptyState: {
@@ -1047,12 +1066,12 @@ const styles = StyleSheet.create({
   emptyText: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#94A3B8',
+    color: theme.textSecondary,
     marginTop: 12,
   },
   emptySubtext: {
     fontSize: 14,
-    color: '#64748B',
+    color: theme.textTertiary,
     marginTop: 4,
     textAlign: 'center',
   },

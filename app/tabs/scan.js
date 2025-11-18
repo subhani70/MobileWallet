@@ -36,6 +36,7 @@ import * as didManager from '../../services/didManager';
 import * as secureStorage from '../../services/secureStorage';
 import apiClient from '../../services/api';
 import logger from '../../utils/logger';
+import { useTheme } from '../../contexts/ThemeContext';
 
 const withTimeout = (promise, timeoutMs = 10000) => {
   return Promise.race([
@@ -66,6 +67,7 @@ const setCachedRegistration = (did, registered) => {
 
 export default function ScanScreen() {
   const router = useRouter();
+  const { theme, isDark } = useTheme();
   const [permission, requestPermission] = useCameraPermissions();
   const [scanned, setScanned] = useState(false);
   const [processing, setProcessing] = useState(false);
@@ -477,23 +479,23 @@ export default function ScanScreen() {
 
   if (!permission.granted) {
     return (
-      <View style={styles.permissionContainer}>
+      <View style={[styles.permissionContainer, { backgroundColor: theme.background }]}>
         <View style={styles.permissionContent}>
           <View style={styles.permissionIcon}>
-            <ImageIcon color="#94A3B8" size={64} />
+            <ImageIcon color={theme.textSecondary} size={64} />
           </View>
-          <Text style={styles.permissionTitle}>Camera Access Required</Text>
-          <Text style={styles.permissionMessage}>
+          <Text style={[styles.permissionTitle, { color: theme.text }]}>Camera Access Required</Text>
+          <Text style={[styles.permissionMessage, { color: theme.textSecondary }]}>
             Please allow camera access to scan QR codes
           </Text>
           <TouchableOpacity
-            style={styles.enableButton}
+            style={[styles.enableButton, { backgroundColor: theme.primary }]}
             onPress={requestPermission}
           >
             <Text style={styles.enableButtonText}>Enable Camera</Text>
           </TouchableOpacity>
           <TouchableOpacity onPress={() => router.back()}>
-            <Text style={styles.backLink}>Go Back</Text>
+            <Text style={[styles.backLink, { color: theme.primary }]}>Go Back</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -547,14 +549,16 @@ export default function ScanScreen() {
               processingStep={processingStep}
               currentTip={tips[currentTip]}
               isCameraReady={isCameraReady}
+              theme={theme}
             />
 
-            <BottomActions onHelp={handleShowHelp} />
+            <BottomActions onHelp={handleShowHelp} theme={theme} />
 
             {processing && (
               <ProcessingOverlay
                 processingStep={processingStep}
                 onCancel={cancelProcessing}
+                theme={theme}
               />
             )}
           </View>
@@ -570,10 +574,12 @@ export default function ScanScreen() {
           result={verificationResult}
           onClose={verificationResult.success ? handleDone : () => setVerificationResult(null)}
           onScanAgain={handleScanAgain}
+          theme={theme}
+          isDark={isDark}
         />
       )}
 
-      {showHelp && <HelpModal onClose={handleCloseHelp} />}
+      {showHelp && <HelpModal onClose={handleCloseHelp} theme={theme} />}
     </View>
   );
 }
@@ -601,7 +607,7 @@ function TopControls({ flashEnabled, onToggleFlash, onClose }) {
   );
 }
 
-function ScanningArea({ processing, processingStep, currentTip, isCameraReady }) {
+function ScanningArea({ processing, processingStep, currentTip, isCameraReady, theme }) {
   const instructionPrimary = processing
     ? processingStep || 'Processing credential...'
     : isCameraReady
@@ -618,7 +624,7 @@ function ScanningArea({ processing, processingStep, currentTip, isCameraReady })
       </View>
 
       <View style={styles.instructionCard}>
-        <Shield color="#06B6D4" size={24} />
+        <Shield color={theme.primary} size={24} />
         <View style={styles.instructionTextContainer}>
           <Text style={styles.instructionPrimary}>{instructionPrimary}</Text>
           <Text style={styles.instructionTip}>{currentTip}</Text>
@@ -743,7 +749,7 @@ function BottomActions({ onHelp }) {
   );
 }
 
-function ProcessingOverlay({ processingStep, onCancel }) {
+function ProcessingOverlay({ processingStep, onCancel, theme }) {
   const [step, setStep] = useState(0);
   const steps = [
     'Reading QR code...',
@@ -764,7 +770,7 @@ function ProcessingOverlay({ processingStep, onCancel }) {
     <View style={styles.processingOverlay}>
       <View style={styles.processingContent}>
         <View style={styles.processingSpinner}>
-          <View style={styles.spinner} />
+          <View style={[styles.spinner, { borderColor: theme.primary }]} />
         </View>
         <Text style={styles.processingText}>{processingStep || steps[step]}</Text>
         <TouchableOpacity style={styles.cancelButton} onPress={onCancel}>
@@ -779,6 +785,8 @@ function VerificationResultModal({
   result,
   onClose,
   onScanAgain,
+  theme,
+  isDark,
 }) {
   const slideAnim = useRef(new Animated.Value(500)).current;
 
@@ -800,6 +808,7 @@ function VerificationResultModal({
           style={[
             styles.resultCard,
             {
+              backgroundColor: theme.surface,
               transform: [{ translateY: slideAnim }],
             },
           ]}
@@ -808,75 +817,96 @@ function VerificationResultModal({
             {isSuccess ? (
               <>
                 <View style={styles.successIcon}>
-                  <CheckCircle2 color="#10B981" size={64} />
+                  <CheckCircle2 color={theme.success} size={64} />
                 </View>
-                <Text style={styles.resultTitle}>Credential Claimed ✓</Text>
+                <Text style={[styles.resultTitle, { color: theme.success }]}>Credential Claimed ✓</Text>
                 {result.status && (
-                  <View style={styles.statusBadge}>
-                    <Text style={styles.statusBadgeText}>{result.status}</Text>
+                  <View
+                    style={[
+                      styles.statusBadge,
+                      { backgroundColor: isDark ? 'rgba(34,197,94,0.2)' : '#DCFCE7', borderColor: theme.success },
+                    ]}
+                  >
+                    <Text style={[styles.statusBadgeText, { color: theme.success }]}>{result.status}</Text>
                   </View>
                 )}
 
-                <View style={styles.credentialDetails}>
+                <View style={[styles.credentialDetails, { backgroundColor: theme.surfaceSecondary }]}>
                   {result.name && (
-                    <DetailRow icon={User} label="Name" value={result.name} />
+                    <DetailRow icon={User} label="Name" value={result.name} theme={theme} />
                   )}
                   {result.credential && (
-                    <DetailRow icon={Shield} label="Credential" value={result.credential} />
+                    <DetailRow icon={Shield} label="Credential" value={result.credential} theme={theme} />
                   )}
                   {result.institution && (
-                    <DetailRow icon={Building} label="Institution" value={result.institution} />
+                    <DetailRow icon={Building} label="Institution" value={result.institution} theme={theme} />
                   )}
                   {result.date && (
-                    <DetailRow icon={Calendar} label="Date" value={result.date} />
+                    <DetailRow icon={Calendar} label="Date" value={result.date} theme={theme} />
                   )}
                   {result.did && (
-                    <DetailRow icon={Hash} label="DID" value={result.did} />
+                    <DetailRow icon={Hash} label="DID" value={result.did} theme={theme} />
                   )}
                 </View>
 
                 {result.proofUrl ? (
                   <TouchableOpacity style={styles.blockchainProof} onPress={() => {}}>
-                    <Text style={styles.blockchainProofText}>View Blockchain Proof</Text>
-                    <ChevronRight color="#06B6D4" size={20} />
+                    <Text style={[styles.blockchainProofText, { color: theme.primary }]}>View Blockchain Proof</Text>
+                    <ChevronRight color={theme.primary} size={20} />
                   </TouchableOpacity>
                 ) : null}
 
-                <TouchableOpacity style={styles.primaryButton} onPress={onClose}>
+                <TouchableOpacity style={[styles.primaryButton, { backgroundColor: theme.primary }]} onPress={onClose}>
                   <Text style={styles.primaryButtonText}>Done</Text>
                 </TouchableOpacity>
 
-                <TouchableOpacity style={styles.secondaryButton} onPress={onScanAgain}>
-                  <Text style={styles.secondaryButtonText}>Scan Another</Text>
+                <TouchableOpacity
+                  style={[styles.secondaryButton, { borderColor: theme.primary }]}
+                  onPress={onScanAgain}
+                >
+                  <Text style={[styles.secondaryButtonText, { color: theme.primary }]}>Scan Another</Text>
                 </TouchableOpacity>
               </>
             ) : (
               <>
                 <View style={styles.failureIcon}>
-                  <XCircle color="#EF4444" size={64} />
+                  <XCircle color={theme.error} size={64} />
                 </View>
-                <Text style={styles.resultTitleError}>{result.errorTitle || 'Verification Failed'}</Text>
+                <Text style={[styles.resultTitleError, { color: theme.error }]}>
+                  {result.errorTitle || 'Verification Failed'}
+                </Text>
 
-                <View style={styles.errorCard}>
-                  <AlertTriangle color="#EF4444" size={24} />
+                <View
+                  style={[
+                    styles.errorCard,
+                    {
+                      borderColor: theme.error,
+                      backgroundColor: isDark ? 'rgba(239,68,68,0.15)' : 'rgba(239,68,68,0.08)',
+                    },
+                  ]}
+                >
+                  <AlertTriangle color={theme.error} size={24} />
                   <View style={styles.errorContent}>
-                    <Text style={styles.errorTitle}>{result.errorTitle || 'Verification Failed'}</Text>
-                    <Text style={styles.errorMessage}>
+                    <Text style={[styles.errorTitle, { color: theme.text }]}>{result.errorTitle || 'Verification Failed'}</Text>
+                    <Text style={[styles.errorMessage, { color: theme.textSecondary }]}>
                       {result.error || 'The credential could not be verified. Please try again.'}
                     </Text>
                   </View>
                 </View>
 
-                <TouchableOpacity style={styles.retryButton} onPress={onScanAgain}>
+                <TouchableOpacity
+                  style={[styles.retryButton, { backgroundColor: theme.primary }]}
+                  onPress={onScanAgain}
+                >
                   <Text style={styles.retryButtonText}>Try Again</Text>
                 </TouchableOpacity>
 
-                <TouchableOpacity style={styles.reportButton}>
-                  <Text style={styles.reportButtonText}>Report Issue</Text>
+                <TouchableOpacity style={[styles.reportButton, { borderColor: theme.primary }]}>
+                  <Text style={[styles.reportButtonText, { color: theme.primary }]}>Report Issue</Text>
                 </TouchableOpacity>
 
                 <TouchableOpacity onPress={onClose}>
-                  <Text style={styles.closeLink}>Close</Text>
+                  <Text style={[styles.closeLink, { color: theme.text }]}>Close</Text>
                 </TouchableOpacity>
               </>
             )}
@@ -887,26 +917,26 @@ function VerificationResultModal({
   );
 }
 
-function DetailRow({ icon: Icon, label, value }) {
+function DetailRow({ icon: Icon, label, value, theme }) {
   return (
     <View style={styles.detailRow}>
-      <Icon color="#64748B" size={20} />
+      <Icon color={theme.textSecondary} size={20} />
       <View style={styles.detailContent}>
-        <Text style={styles.detailLabel}>{label}</Text>
-        <Text style={styles.detailValue}>{value}</Text>
+        <Text style={[styles.detailLabel, { color: theme.textTertiary }]}>{label}</Text>
+        <Text style={[styles.detailValue, { color: theme.text }]}>{value}</Text>
       </View>
     </View>
   );
 }
 
-function HelpModal({ onClose }) {
+function HelpModal({ onClose, theme }) {
   return (
     <Modal animationType="slide" presentationStyle="pageSheet">
-      <View style={styles.helpModal}>
+      <View style={[styles.helpModal, { backgroundColor: theme.surface }]}>
         <View style={styles.helpHeader}>
-          <Text style={styles.helpTitle}>How to Scan</Text>
+          <Text style={[styles.helpTitle, { color: theme.text }]}>How to Scan</Text>
           <TouchableOpacity onPress={onClose}>
-            <X color="#1E293B" size={28} />
+            <X color={theme.text} size={28} />
           </TouchableOpacity>
         </View>
 
@@ -915,25 +945,29 @@ function HelpModal({ onClose }) {
             number="1"
             title="Position QR Code"
             description="Center the QR code in the frame"
+            theme={theme}
           />
           <HelpStep
             number="2"
             title="Hold Steady"
             description="Keep your phone still for best results"
+            theme={theme}
           />
           <HelpStep
             number="3"
             title="Good Lighting"
             description="Ensure adequate lighting or use flash"
+            theme={theme}
           />
           <HelpStep
             number="4"
             title="Wait for Verification"
             description="Verification happens automatically"
+            theme={theme}
           />
         </View>
 
-        <TouchableOpacity style={styles.gotItButton} onPress={onClose}>
+        <TouchableOpacity style={[styles.gotItButton, { backgroundColor: theme.primary }]} onPress={onClose}>
           <Text style={styles.gotItButtonText}>Got It</Text>
         </TouchableOpacity>
       </View>
@@ -941,15 +975,15 @@ function HelpModal({ onClose }) {
   );
 }
 
-function HelpStep({ number, title, description }) {
+function HelpStep({ number, title, description, theme }) {
   return (
     <View style={styles.helpStep}>
-      <View style={styles.stepNumber}>
-        <Text style={styles.stepNumberText}>{number}</Text>
+      <View style={[styles.stepNumber, { backgroundColor: theme.primary + '33' }]}>
+        <Text style={[styles.stepNumberText, { color: theme.primary }]}>{number}</Text>
       </View>
       <View style={styles.stepContent}>
-        <Text style={styles.stepTitle}>{title}</Text>
-        <Text style={styles.stepDescription}>{description}</Text>
+        <Text style={[styles.stepTitle, { color: theme.text }]}>{title}</Text>
+        <Text style={[styles.stepDescription, { color: theme.textSecondary }]}>{description}</Text>
       </View>
     </View>
   );

@@ -1,7 +1,7 @@
 // app/tabs/credentials.js
 // Credentials Screen - Matching Mock Design
 
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useMemo } from 'react';
 import {
   View,
   Text,
@@ -30,9 +30,12 @@ import {
 import * as secureStorage from '../../services/secureStorage';
 import logger from '../../utils/logger';
 import * as didManager from '../../services/didManager';
+import { useTheme } from '../../contexts/ThemeContext';
 
 export default function CredentialsScreen() {
   const router = useRouter();
+  const { theme, isDark } = useTheme();
+  const styles = useMemo(() => createStyles(theme), [theme]);
   const [credentials, setCredentials] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -257,13 +260,13 @@ export default function CredentialsScreen() {
             style={styles.headerButton} 
             onPress={onRefresh}
           >
-            <RefreshCw color="#94A3B8" size={20} />
+            <RefreshCw color={theme.textSecondary} size={20} />
           </TouchableOpacity>
           <TouchableOpacity 
             style={styles.headerButton} 
             onPress={handleImport}
           >
-            <Plus color="#FFFFFF" size={24} />
+            <Plus color={theme.text} size={24} />
           </TouchableOpacity>
         </View>
       </Animated.View>
@@ -281,7 +284,7 @@ export default function CredentialsScreen() {
       ]}
     >
       <View style={styles.emptyIconContainer}>
-        <FolderOpen color="#64748B" size={100} strokeWidth={1.5} />
+        <FolderOpen color={theme.textTertiary} size={100} strokeWidth={1.5} />
       </View>
       <Text style={styles.emptyTitle}>No Credentials Yet</Text>
       <Text style={styles.emptySubtitle}>
@@ -305,7 +308,7 @@ export default function CredentialsScreen() {
           style={styles.secondaryButton}
           onPress={() => router.push('/tabs/scan')}
         >
-          <Download color="#06B6D4" size={20} />
+          <Download color={theme.primary} size={20} />
           <Text style={styles.secondaryButtonText}>Scan QR Code</Text>
         </TouchableOpacity>
       )}
@@ -314,7 +317,7 @@ export default function CredentialsScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
-      <StatusBar barStyle="light-content" />
+      <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
       
       {renderHeader()}
       
@@ -326,13 +329,14 @@ export default function CredentialsScreen() {
           <RefreshControl
             refreshing={refreshing}
             onRefresh={onRefresh}
-            tintColor="#06B6D4"
+            tintColor={theme.primary}
+            colors={[theme.primary]}
           />
         }
       >
         {isLoading ? (
           <View style={styles.loadingContainer}>
-            <RefreshCw color="#06B6D4" size={32} />
+            <RefreshCw color={theme.primary} size={32} />
             <Text style={styles.loadingText}>Loading credentials...</Text>
           </View>
         ) : credentials.length === 0 ? (
@@ -346,6 +350,8 @@ export default function CredentialsScreen() {
                 router={router}
                 fadeAnim={fadeAnim}
                 onDelete={handleDeleteCredential}
+                styles={styles}
+                theme={theme}
               />
             ))}
           </View>
@@ -357,7 +363,7 @@ export default function CredentialsScreen() {
   );
 }
 
-function CredentialCard({ credential, router, fadeAnim, onDelete }) {
+function CredentialCard({ credential, router, fadeAnim, onDelete, styles, theme }) {
   const scaleAnim = useRef(new Animated.Value(1)).current;
 
   const handlePressIn = () => {
@@ -407,7 +413,7 @@ function CredentialCard({ credential, router, fadeAnim, onDelete }) {
           <View style={styles.credentialRight}>
             {credential.verified && (
               <View style={styles.verifiedBadge}>
-                <CheckCircle2 color="#10B981" size={12} />
+                <CheckCircle2 color={theme.success} size={12} />
                 <Text style={styles.verifiedText}>Verified</Text>
               </View>
             )}
@@ -419,7 +425,7 @@ function CredentialCard({ credential, router, fadeAnim, onDelete }) {
                   onDelete(credential.rawCredential?.id || credential.id, credential.title);
                 }}
               >
-                <Trash2 color="#EF4444" size={18} />
+                <Trash2 color={theme.error} size={18} />
               </TouchableOpacity>
               <TouchableOpacity
                 style={styles.actionButton}
@@ -431,10 +437,10 @@ function CredentialCard({ credential, router, fadeAnim, onDelete }) {
                   });
                 }}
               >
-                <Share2 color="#06B6D4" size={18} />
+                <Share2 color={theme.primary} size={18} />
               </TouchableOpacity>
             </View>
-            <ChevronRight color="#9CA3AF" size={20} />
+            <ChevronRight color={theme.textTertiary} size={20} />
           </View>
         </Animated.View>
       </TouchableOpacity>
@@ -442,10 +448,10 @@ function CredentialCard({ credential, router, fadeAnim, onDelete }) {
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = (theme) => StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#0F172A',
+    backgroundColor: theme.background,
   },
   header: {
     paddingHorizontal: 16,
@@ -460,12 +466,12 @@ const styles = StyleSheet.create({
   headerTitle: {
     fontSize: 28,
     fontWeight: 'bold',
-    color: '#F1F5F9',
+    color: theme.text,
     letterSpacing: -0.5,
   },
   headerSubtitle: {
     fontSize: 14,
-    color: '#64748B',
+    color: theme.textTertiary,
     marginTop: 4,
   },
   headerActions: {
@@ -476,11 +482,11 @@ const styles = StyleSheet.create({
     width: 44,
     height: 44,
     borderRadius: 22,
-    backgroundColor: '#1E293B',
+    backgroundColor: theme.surface,
     justifyContent: 'center',
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: '#334155',
+    borderColor: theme.border,
   },
   scrollView: {
     flex: 1,
@@ -499,9 +505,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     borderRadius: 16,
     borderTopWidth: 4,
-    backgroundColor: '#1E293B',
+    backgroundColor: theme.surface,
     padding: 16,
-    shadowColor: '#06B6D4',
+    shadowColor: theme.shadow,
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.2,
     shadowRadius: 8,
@@ -512,7 +518,7 @@ const styles = StyleSheet.create({
     width: 56,
     height: 56,
     borderRadius: 28,
-    backgroundColor: '#334155',
+    backgroundColor: theme.surfaceSecondary,
     justifyContent: 'center',
     alignItems: 'center',
     overflow: 'hidden',
@@ -531,19 +537,19 @@ const styles = StyleSheet.create({
   credentialTitle: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#F1F5F9',
+    color: theme.text,
   },
   credentialSubtitle: {
     fontSize: 14,
-    color: '#64748B',
+    color: theme.textTertiary,
   },
   credentialInstitution: {
     fontSize: 12,
-    color: '#64748B',
+    color: theme.textTertiary,
   },
   credentialDate: {
     fontSize: 12,
-    color: '#64748B',
+    color: theme.textTertiary,
   },
   credentialRight: {
     alignItems: 'flex-end',
@@ -572,7 +578,7 @@ const styles = StyleSheet.create({
   verifiedText: {
     fontSize: 10,
     fontWeight: '600',
-    color: '#10B981',
+    color: theme.success,
   },
   loadingContainer: {
     alignItems: 'center',
@@ -582,7 +588,7 @@ const styles = StyleSheet.create({
   },
   loadingText: {
     fontSize: 16,
-    color: '#64748B',
+    color: theme.textTertiary,
   },
   emptyContainer: {
     alignItems: 'center',
@@ -596,18 +602,18 @@ const styles = StyleSheet.create({
   emptyTitle: {
     fontSize: 24,
     fontWeight: 'bold',
-    color: '#F1F5F9',
+    color: theme.text,
     marginBottom: 12,
   },
   emptySubtitle: {
     fontSize: 16,
-    color: '#64748B',
+    color: theme.textTertiary,
     textAlign: 'center',
     lineHeight: 24,
     marginBottom: 32,
   },
   primaryButton: {
-    backgroundColor: '#06B6D4',
+    backgroundColor: theme.primary,
     borderRadius: 12,
     paddingHorizontal: 24,
     paddingVertical: 14,
@@ -627,13 +633,13 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: '#06B6D4',
+    borderColor: theme.primary,
     backgroundColor: 'transparent',
   },
   secondaryButtonText: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#06B6D4',
+    color: theme.primary,
   },
   bottomPadding: {
     height: 100,

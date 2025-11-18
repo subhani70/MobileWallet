@@ -12,32 +12,104 @@ import { getSelectedNetwork } from './networkService';
 let cachedProvider = null;
 let cachedRpcUrl = null;
 let cachedChainId = null;
+let providerInitPromise = null;
+
+const RPC_HEALTH_CACHE_TTL = 15000; // 15 seconds
+const RPC_HEALTH_TIMEOUT = 5000; // 5 seconds
+const rpcHealthCache = new Map();
 
 export const resetProviderCache = () => {
   cachedProvider = null;
   cachedRpcUrl = null;
   cachedChainId = null;
+  providerInitPromise = null;
+  rpcHealthCache.clear();
+};
+
+const ensureRpcReachable = async (rpcUrl) => {
+  if (!rpcUrl) {
+    throw new Error('RPC endpoint is not configured for this network.');
+  }
+
+  const lastSuccess = rpcHealthCache.get(rpcUrl);
+  if (lastSuccess && Date.now() - lastSuccess < RPC_HEALTH_CACHE_TTL) {
+    return;
+  }
+
+  const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const timeoutId = setTimeout(() => controller?.abort(), RPC_HEALTH_TIMEOUT);
+
+  try {
+    const response = await fetch(rpcUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'eth_chainId',
+        params: [],
+        id: 1,
+      }),
+      signal: controller?.signal,
+    });
+
+    if (!response.ok) {
+      throw new Error(`RPC responded with status ${response.status}`);
+    }
+
+    const data = await response.json();
+    if (!data?.result) {
+      throw new Error('RPC response missing chainId result');
+    }
+
+    rpcHealthCache.set(rpcUrl, Date.now());
+  } catch (error) {
+    throw new Error(
+      error?.name === 'AbortError'
+        ? 'RPC endpoint timed out. Please verify the node is running and reachable.'
+        : `Unable to reach RPC endpoint: ${error?.message || 'Unknown error'}`
+    );
+  } finally {
+    clearTimeout(timeoutId);
+  }
 };
 
 export const getProvider = async () => {
-  try {
-    const network = await getSelectedNetwork();
-    if (!network?.rpcUrl) {
-      throw new Error('Network RPC endpoint is not configured.');
-    }
-
-    if (cachedProvider && cachedRpcUrl === network.rpcUrl && cachedChainId === network.chainId) {
-      return cachedProvider;
-    }
-
-    cachedRpcUrl = network.rpcUrl;
-    cachedChainId = network.chainId;
-    cachedProvider = new ethers.JsonRpcProvider(network.rpcUrl, network.chainId ? Number(network.chainId) : undefined);
-    return cachedProvider;
-  } catch (error) {
-    logger.error('Failed to get blockchain provider:', error);
-    throw new Error('Could not connect to the blockchain network.');
+  if (providerInitPromise) {
+    return providerInitPromise;
   }
+
+  providerInitPromise = (async () => {
+    try {
+      const network = await getSelectedNetwork();
+      if (!network?.rpcUrl) {
+        throw new Error('Network RPC endpoint is not configured.');
+      }
+
+      if (cachedProvider && cachedRpcUrl === network.rpcUrl && cachedChainId === network.chainId) {
+        return cachedProvider;
+      }
+
+      await ensureRpcReachable(network.rpcUrl);
+
+      const provider = new ethers.JsonRpcProvider(
+        network.rpcUrl,
+        network.chainId ? Number(network.chainId) : undefined
+      );
+
+      cachedRpcUrl = network.rpcUrl;
+      cachedChainId = network.chainId;
+      cachedProvider = provider;
+      return provider;
+    } catch (error) {
+      logger.error('Failed to get blockchain provider:', error);
+      resetProviderCache();
+      throw new Error(error?.message || 'Could not connect to the blockchain network.');
+    } finally {
+      providerInitPromise = null;
+    }
+  })();
+
+  return providerInitPromise;
 };
 
 export const getWallet = async () => {
