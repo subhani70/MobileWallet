@@ -1,6 +1,7 @@
 // services/accountManager.js
 // High-level account management service for multi-account wallets (MetaMask-style)
 
+import { ethers } from 'ethers';
 import { deriveAccountAtIndex } from '../utils/crypto.js';
 import * as secureStorage from './secureStorage.js';
 import logger from '../utils/logger.js';
@@ -95,6 +96,67 @@ export const createNewAccount = async (label = null) => {
     return account;
   } catch (error) {
     logger.error('Failed to create new account: ' + error.message);
+    throw error;
+  }
+};
+
+/**
+ * Import an existing account using a raw private key
+ * @param {string} privateKeyInput - Private key provided by user
+ * @param {string|null} label - Optional label for the account
+ * @returns {Promise<object>} Imported account object (without private key)
+ */
+export const importAccountFromPrivateKey = async (privateKeyInput, label = null) => {
+  try {
+    if (!privateKeyInput || typeof privateKeyInput !== 'string') {
+      throw new Error('Private key is required');
+    }
+
+    let normalizedKey = privateKeyInput.trim();
+    if (!normalizedKey.startsWith('0x')) {
+      normalizedKey = `0x${normalizedKey}`;
+    }
+
+    if (!ethers.isHexString(normalizedKey, 32)) {
+      throw new Error('Invalid private key format');
+    }
+
+    const wallet = new ethers.Wallet(normalizedKey);
+    const accountsWithKeys = await secureStorage.getAllAccountsWithKeys();
+    const exists = accountsWithKeys.some(
+      (account) => account.address?.toLowerCase() === wallet.address.toLowerCase()
+    );
+    if (exists) {
+      throw new Error('This account is already added');
+    }
+
+    const accountIndex = await secureStorage.getNextAccountIndex();
+    const publicKey =
+      wallet.signingKey?.publicKey ||
+      wallet.publicKey ||
+      ethers.SigningKey.computePublicKey(wallet.privateKey, false);
+
+    const accountData = {
+      index: accountIndex,
+      address: wallet.address,
+      privateKey: wallet.privateKey,
+      publicKey: String(publicKey),
+      did: `did:ethr:VoltusWave:${wallet.address.toLowerCase()}`,
+      label: label?.trim() || `Imported ${accountIndex + 1}`,
+      derivationPath: 'imported-private-key',
+      createdAt: new Date().toISOString(),
+      isImported: true,
+    };
+
+    await secureStorage.addAccount(accountData);
+    await secureStorage.setActiveAccount(accountIndex);
+
+    logger.success(`✅ Imported account ${accountIndex}: ${wallet.address.substring(0, 10)}...`);
+
+    const { privateKey, ...account } = accountData;
+    return account;
+  } catch (error) {
+    logger.error('Failed to import account: ' + error.message);
     throw error;
   }
 };
@@ -227,6 +289,7 @@ export default {
   getActiveAccount,
   getAccountByIndex,
   createNewAccount,
+  importAccountFromPrivateKey,
   switchAccount,
   updateAccountLabel,
   deleteAccount,

@@ -10,6 +10,8 @@ import {
   RefreshControl,
   Animated,
   StatusBar,
+  Modal,
+  TextInput,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import * as Haptics from 'expo-haptics';
@@ -41,6 +43,11 @@ export default function TransactionsTab() {
   const [tokenBalances, setTokenBalances] = useState({});
   const [isFetchingBalance, setIsFetchingBalance] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [importModalVisible, setImportModalVisible] = useState(false);
+  const [importPrivateKey, setImportPrivateKey] = useState('');
+  const [importAccountLabel, setImportAccountLabel] = useState('');
+  const [isImportingAccount, setIsImportingAccount] = useState(false);
+  const [importError, setImportError] = useState('');
   const previousVwBalanceRef = useRef('0');
   const isInitialLoadRef = useRef(true);
   const suppressNotificationsRef = useRef(false);
@@ -284,6 +291,42 @@ export default function TransactionsTab() {
     }
   };
 
+  const openImportModal = () => {
+    setImportPrivateKey('');
+    setImportAccountLabel('');
+    setImportError('');
+    setImportModalVisible(true);
+  };
+
+  const closeImportModal = () => {
+    if (!isImportingAccount) {
+      setImportModalVisible(false);
+    }
+  };
+
+  const handleImportAccount = async () => {
+    if (!importPrivateKey.trim()) {
+      setImportError('Enter the private key to continue');
+      return;
+    }
+    setImportError('');
+    setIsImportingAccount(true);
+    try {
+      await accountManager.importAccountFromPrivateKey(importPrivateKey.trim(), importAccountLabel.trim() || null);
+      const allAccounts = await accountManager.getAllAccounts();
+      setAccounts(allAccounts);
+      await loadWalletData(true);
+      await loadCustomTokens();
+      setDropdownOpen(false);
+      setImportModalVisible(false);
+      Alert.alert('Account imported', 'The account has been added and set as active.');
+    } catch (error) {
+      Alert.alert('Import failed', error.message || 'Unable to import account. Check the private key and try again.');
+    } finally {
+      setIsImportingAccount(false);
+    }
+  };
+
   // Close dropdown when clicking outside
   useEffect(() => {
     if (dropdownOpen) {
@@ -469,6 +512,14 @@ export default function TransactionsTab() {
                     </TouchableOpacity>
                   ))}
                 </ScrollView>
+                <TouchableOpacity
+                  style={[styles.importButton, { borderTopColor: theme.border }]}
+                  onPress={openImportModal}
+                  activeOpacity={0.85}
+                >
+                  <Ionicons name="download-outline" size={18} color={theme.primary} />
+                  <Text style={[styles.importButtonText, { color: theme.primary }]}>Import account with private key</Text>
+                </TouchableOpacity>
               </View>
             </View>
           )}
@@ -572,6 +623,50 @@ export default function TransactionsTab() {
           </View>
         </View>
       </ScrollView>
+      <Modal visible={importModalVisible} transparent animationType="fade" onRequestClose={closeImportModal}>
+        <View style={styles.modalBackdrop}>
+          <View style={[styles.modalCard, { backgroundColor: theme.surface, borderColor: theme.border }]}>
+            <Text style={[styles.modalTitle, { color: theme.text }]}>Import Account</Text>
+            <Text style={[styles.modalSubtitle, { color: theme.textSecondary }]}>
+              Paste the private key for the account you want to import. The key stays on this device.
+            </Text>
+            <TextInput
+              style={[styles.modalInput, { borderColor: theme.border, color: theme.text, backgroundColor: theme.surfaceSecondary || theme.surface }]}
+              placeholder="0xABC123..."
+              placeholderTextColor={theme.textTertiary}
+              value={importPrivateKey}
+              onChangeText={setImportPrivateKey}
+              autoCapitalize="none"
+              autoCorrect={false}
+              multiline
+            />
+            <TextInput
+              style={[styles.modalInput, { borderColor: theme.border, color: theme.text, backgroundColor: theme.surfaceSecondary || theme.surface }]}
+              placeholder="Optional label"
+              placeholderTextColor={theme.textTertiary}
+              value={importAccountLabel}
+              onChangeText={setImportAccountLabel}
+            />
+            {!!importError && <Text style={styles.modalError}>{importError}</Text>}
+            <View style={styles.modalActions}>
+              <TouchableOpacity style={[styles.modalButton, styles.modalCancelButton]} onPress={closeImportModal} disabled={isImportingAccount}>
+                <Text style={[styles.modalButtonText, { color: theme.text }]}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.modalButton, styles.modalPrimaryButton, { backgroundColor: theme.primary }]}
+                onPress={handleImportAccount}
+                disabled={isImportingAccount}
+              >
+                {isImportingAccount ? (
+                  <ActivityIndicator color="#FFFFFF" />
+                ) : (
+                  <Text style={styles.modalPrimaryText}>Import</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -651,6 +746,19 @@ const styles = StyleSheet.create({
   },
   dropdownList: {
     maxHeight: 280,
+  },
+  importButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderTopWidth: 1,
+  },
+  importButtonText: {
+    fontSize: 13,
+    fontWeight: '600',
   },
   dropdownItem: {
     flexDirection: 'row',
@@ -825,5 +933,67 @@ const styles = StyleSheet.create({
   },
   tokenTagCustom: {
     backgroundColor: '#10B981',
+  },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.35)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  modalCard: {
+    width: '100%',
+    borderRadius: 20,
+    borderWidth: 1,
+    padding: 20,
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    marginBottom: 8,
+  },
+  modalSubtitle: {
+    fontSize: 13,
+    marginBottom: 16,
+  },
+  modalInput: {
+    borderWidth: 1,
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 15,
+    marginBottom: 12,
+  },
+  modalError: {
+    color: '#EF4444',
+    fontSize: 13,
+    marginBottom: 8,
+  },
+  modalActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 12,
+    marginTop: 4,
+  },
+  modalButton: {
+    borderRadius: 14,
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+  },
+  modalCancelButton: {
+    backgroundColor: 'transparent',
+  },
+  modalPrimaryButton: {
+    minWidth: 110,
+    alignItems: 'center',
+  },
+  modalButtonText: {
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  modalPrimaryText: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: '700',
   },
 });
