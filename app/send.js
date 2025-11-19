@@ -19,6 +19,8 @@ import { sendVw, sendTokenByAddress } from '../services/blockchainService';
 import * as accountManager from '../services/accountManager';
 import { getSelectedNetwork } from '../services/networkService';
 import { getTokensForNetwork } from '../services/tokenService';
+import { logTransactionActivity } from '../services/activityService';
+import { DEFAULT_NETWORK } from '../constants/networks';
 
 export default function SendScreen() {
   const router = useRouter();
@@ -127,6 +129,23 @@ export default function SendScreen() {
             onPress: () => router.back(),
           },
         ]);
+        try {
+          await logTransactionActivity({
+            networkId: network?.id || DEFAULT_NETWORK.id,
+            networkName: network?.name || DEFAULT_NETWORK.name,
+            accountAddress: account?.address,
+            txHash: result.hash || result.receipt?.transactionHash || result.receipt?.hash,
+            type: 'send',
+            status: 'confirmed',
+            assetType: selectedAsset.type,
+            assetSymbol: selectedAsset.symbol || (network?.symbol || 'VW'),
+            assetAddress: selectedAsset.type === 'erc20' ? selectedAsset.address : null,
+            amount,
+            recipient,
+          });
+        } catch (logError) {
+          console.warn('Failed to record activity', logError);
+        }
         setRecipient('');
         setAmount('');
       } else {
@@ -137,7 +156,7 @@ export default function SendScreen() {
     } finally {
       setIsSubmitting(false);
     }
-  }, [amount, recipient, router, selectedAsset]);
+  }, [account?.address, amount, network?.id, network?.name, recipient, router, selectedAsset]);
 
   const nativeSymbol = network?.symbol || 'VW';
   const assetSymbol = selectedAsset?.symbol || nativeSymbol;

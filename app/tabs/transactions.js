@@ -18,6 +18,7 @@ import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter } from 'expo-router';
 import { useTheme } from '../../contexts/ThemeContext';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { getVwBalance, getTokenBalanceByAddress } from '../../services/blockchainService';
 import { getWalletInfo } from '../../services/didManager';
 import * as accountManager from '../../services/accountManager';
@@ -25,10 +26,12 @@ import { Copy, Check, ChevronDown, ChevronUp } from 'lucide-react-native';
 import * as Clipboard from 'expo-clipboard';
 import { DEFAULT_NETWORK, NETWORK_STORAGE_KEY } from '../../constants/networks';
 import { getTokensForNetwork } from '../../services/tokenService';
+import { getActivityForAccount } from '../../services/activityService';
 
 export default function TransactionsTab() {
   const { theme, isDark } = useTheme();
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   
   const [vwBalance, setVwBalance] = useState('0');
   const [address, setAddress] = useState('');
@@ -40,6 +43,8 @@ export default function TransactionsTab() {
   const [customTokens, setCustomTokens] = useState([]);
   const customTokensRef = useRef([]);
   const [tokenBalances, setTokenBalances] = useState({});
+  const [activityEntries, setActivityEntries] = useState([]);
+  const [isLoadingActivity, setIsLoadingActivity] = useState(false);
   const [isFetchingBalance, setIsFetchingBalance] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [importModalVisible, setImportModalVisible] = useState(false);
@@ -80,7 +85,7 @@ export default function TransactionsTab() {
   }, [toastAnimation]);
 
   const presentAlert = useCallback(
-    ({ title, message, icon = '✨', type = 'info', duration = 3600 } = {}) => {
+    ({ title, message, icon = null, type = 'info', duration = 3600 } = {}) => {
       if (!title && !message) return;
       if (toastTimeoutRef.current) {
         clearTimeout(toastTimeoutRef.current);
@@ -190,6 +195,30 @@ export default function TransactionsTab() {
     loadCustomTokens();
   }, [loadCustomTokens]);
 
+  const loadActivityLog = useCallback(async () => {
+    if (!selectedNetwork?.id || !address) {
+      setActivityEntries([]);
+      return;
+    }
+    setIsLoadingActivity(true);
+    try {
+      const history = await getActivityForAccount({
+        networkId: selectedNetwork.id,
+        accountAddress: address,
+        limit: 25,
+      });
+      setActivityEntries(history);
+    } catch (error) {
+      console.warn('Failed to load local activity log', error);
+    } finally {
+      setIsLoadingActivity(false);
+    }
+  }, [selectedNetwork?.id, address]);
+
+  useEffect(() => {
+    loadActivityLog();
+  }, [loadActivityLog]);
+
   // Function to show received funds notification
   const showReceivedNotification = useCallback((amount, asset) => {
     // Haptic feedback
@@ -286,7 +315,8 @@ export default function TransactionsTab() {
       loadWalletData();
       loadSelectedNetwork();
       loadCustomTokens();
-    }, [loadWalletData, loadSelectedNetwork, loadCustomTokens])
+      loadActivityLog();
+    }, [loadWalletData, loadSelectedNetwork, loadCustomTokens, loadActivityLog])
   );
 
   // Pull-to-refresh handler
@@ -297,11 +327,12 @@ export default function TransactionsTab() {
         await loadWalletData();
         await loadSelectedNetwork();
         await loadCustomTokens();
+        await loadActivityLog();
       } finally {
         setRefreshing(false);
       }
     })();
-  }, [loadWalletData, loadSelectedNetwork, loadCustomTokens]);
+  }, [loadWalletData, loadSelectedNetwork, loadCustomTokens, loadActivityLog]);
 
   const handleCopyAddress = useCallback(
     async (value) => {
@@ -340,6 +371,7 @@ export default function TransactionsTab() {
       setAccounts(allAccounts);
       await loadWalletData();
       await loadCustomTokens();
+      await loadActivityLog();
       
       // Re-enable notifications after a short delay
       setTimeout(() => {
@@ -385,6 +417,7 @@ export default function TransactionsTab() {
       setAccounts(allAccounts);
       await loadWalletData(true);
       await loadCustomTokens();
+      await loadActivityLog();
       setDropdownOpen(false);
       setImportModalVisible(false);
       presentAlert({
@@ -495,6 +528,58 @@ export default function TransactionsTab() {
 
   const activeToastTone = (toastConfig && toastThemes[toastConfig.type]) || toastThemes.info;
 
+  const handleActivityPress = useCallback(
+    async (entry) => {
+      if (!entry?.txHash) return;
+      try {
+        await Clipboard.setStringAsync(entry.txHash);
+        presentAlert({
+          icon: '📋',
+          title: 'Hash copied',
+          message: 'Transaction hash copied to clipboard.',
+          type: 'info',
+        });
+      } catch (error) {
+        console.warn('Failed to copy tx hash', error);
+      }
+    },
+    [presentAlert]
+  );
+
+  const truncatedValue = useCallback((value = '', start = 6, end = 4) => {
+    if (!value || typeof value !== 'string') return 'N/A';
+    if (value.length <= start + end) return value;
+    return `${value.substring(0, start)}...${value.substring(value.length - end)}`;
+  }, []);
+
+  const statusStyles = useCallback(
+    (status = 'confirmed') => {
+      switch (status) {
+        case 'failed':
+          return { backgroundColor: 'rgba(239,68,68,0.15)', color: '#EF4444' };
+        case 'pending':
+          return { backgroundColor: 'rgba(245,158,11,0.15)', color: '#F59E0B' };
+        default:
+          return { backgroundColor: 'rgba(16,185,129,0.15)', color: '#10B981' };
+      }
+    },
+    []
+  );
+
+  const activityHeaderNote =
+    'Only wallet-initiated actions appear here. Incoming or third-party transactions stay hidden for privacy.';
+
+  const formatActivityAmount = useCallback((value) => {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) {
+      return value || '0';
+    }
+    if (Math.abs(numeric) >= 1) {
+      return numeric.toFixed(4).replace(/\.?0+$/, '');
+    }
+    return numeric.toPrecision(4).replace(/\.?0+$/, '');
+  }, []);
+
   const actionButtons = [
     {
       key: 'send',
@@ -541,7 +626,7 @@ export default function TransactionsTab() {
   return (
     <View style={[styles.container, { backgroundColor: theme.background }]}>
       {toastConfig && (
-        <View pointerEvents="box-none" style={styles.toastWrapper}>
+        <View pointerEvents="box-none" style={[styles.toastWrapper, { paddingTop: insets.top + 12 }]}>
           <Animated.View
             style={[
               styles.toastContainer,
@@ -552,10 +637,7 @@ export default function TransactionsTab() {
                 opacity: toastAnimation,
               },
             ]}
-          >
-            <View style={[styles.toastIconBadge, { backgroundColor: activeToastTone.iconBg }]}>
-              <Text style={styles.toastIconText}>{toastConfig.icon}</Text>
-            </View>
+            >
             <View style={styles.toastTextGroup}>
               {!!toastConfig.title && (
                 <Text style={[styles.toastTitle, { color: activeToastTone.title }]} numberOfLines={1}>
@@ -783,6 +865,69 @@ export default function TransactionsTab() {
             ))}
           </View>
         </View>
+
+        <View style={[styles.section, { backgroundColor: theme.surface }]}>
+          <View style={styles.sectionHeader}>
+            <Text style={[styles.sectionTitle, { color: theme.text }]}>Activity</Text>
+          </View>
+          <Text style={[styles.activityNote, { color: theme.textTertiary }]}>{activityHeaderNote}</Text>
+          <View style={[styles.activityList, { borderColor: theme.border, backgroundColor: theme.surfaceSecondary || theme.surface }]}>
+            {isLoadingActivity ? (
+              <View style={styles.activityEmpty}>
+                <ActivityIndicator color={theme.primary} />
+                <Text style={[styles.activityEmptyText, { color: theme.textSecondary }]}>Loading your outgoing actions…</Text>
+              </View>
+            ) : activityEntries.length === 0 ? (
+              <View style={styles.activityEmpty}>
+                <Ionicons name="arrow-up-circle-outline" size={28} color={theme.textTertiary} />
+                <Text style={[styles.activityEmptyText, { color: theme.textSecondary }]}>No wallet-initiated transactions yet.</Text>
+                <Text style={[styles.activityHint, { color: theme.textTertiary }]}>Send something from this wallet to see it here.</Text>
+              </View>
+            ) : (
+              activityEntries.map((entry, index) => {
+                const statusTheme = statusStyles(entry.status);
+                const timestampLabel = entry.timestamp ? new Date(entry.timestamp).toLocaleString() : 'Unknown time';
+                return (
+                  <TouchableOpacity
+                    key={entry.id}
+                    style={[
+                      styles.activityItem,
+                      {
+                        borderBottomWidth: index < activityEntries.length - 1 ? 1 : 0,
+                        borderBottomColor: theme.border,
+                      },
+                    ]}
+                    onPress={() => handleActivityPress(entry)}
+                    activeOpacity={entry.txHash ? 0.8 : 1}
+                  >
+                    <View style={[styles.activityIconCircle, { backgroundColor: 'rgba(16,185,129,0.12)' }]}>
+                      <Ionicons name="arrow-up" size={18} color="#10B981" />
+                    </View>
+                    <View style={styles.activityTextGroup}>
+                      <Text style={[styles.activityTitle, { color: theme.text }]}>
+                        Sent {formatActivityAmount(entry.amount)} {entry.assetSymbol || selectedNetwork?.symbol || 'VW'}
+                      </Text>
+                      <Text style={[styles.activitySubtitle, { color: theme.textSecondary }]} numberOfLines={1}>
+                        To {truncatedValue(entry.recipient || entry.metadata?.to)} · {timestampLabel}
+                      </Text>
+                      {entry.txHash && (
+                        <Text style={[styles.activityHash, { color: theme.textTertiary }]} numberOfLines={1}>
+                          {truncatedValue(entry.txHash, 10, 6)}
+                        </Text>
+                      )}
+                    </View>
+                    <View style={styles.activityMeta}>
+                      <View style={[styles.activityStatus, { backgroundColor: statusTheme.backgroundColor }]}>
+                        <Text style={[styles.activityStatusText, { color: statusTheme.color }]}>{entry.status || 'confirmed'}</Text>
+                      </View>
+                      {entry.txHash && <Ionicons name="copy-outline" size={18} color={theme.textTertiary} />}
+                    </View>
+                  </TouchableOpacity>
+                );
+              })
+            )}
+          </View>
+        </View>
       </ScrollView>
       <Modal visible={importModalVisible} transparent animationType="fade" onRequestClose={closeImportModal}>
         <View style={styles.modalBackdrop}>
@@ -849,7 +994,7 @@ const styles = StyleSheet.create({
   },
   toastWrapper: {
     position: 'absolute',
-    top: 12,
+    top: 0,
     left: 0,
     right: 0,
     zIndex: 40,
@@ -868,16 +1013,6 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 10 },
     shadowOpacity: 0.15,
     shadowRadius: 20,
-  },
-  toastIconBadge: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  toastIconText: {
-    fontSize: 20,
   },
   toastTextGroup: {
     flex: 1,
@@ -1142,6 +1277,75 @@ const styles = StyleSheet.create({
   },
   tokenTagCustom: {
     backgroundColor: '#10B981',
+  },
+  activityNote: {
+    fontSize: 12,
+    marginBottom: 12,
+    lineHeight: 16,
+  },
+  activityList: {
+    marginTop: 8,
+    borderRadius: 20,
+    borderWidth: 1,
+    overflow: 'hidden',
+  },
+  activityEmpty: {
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 28,
+    paddingHorizontal: 16,
+  },
+  activityEmptyText: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  activityHint: {
+    fontSize: 12,
+    textAlign: 'center',
+  },
+  activityItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 16,
+    paddingHorizontal: 16,
+  },
+  activityIconCircle: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+  },
+  activityTextGroup: {
+    flex: 1,
+    gap: 4,
+  },
+  activityTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  activitySubtitle: {
+    fontSize: 13,
+  },
+  activityHash: {
+    fontSize: 12,
+    fontFamily: 'monospace',
+  },
+  activityMeta: {
+    alignItems: 'flex-end',
+    gap: 8,
+    marginLeft: 12,
+  },
+  activityStatus: {
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
+  activityStatusText: {
+    fontSize: 11,
+    fontWeight: '700',
+    textTransform: 'capitalize',
   },
   modalBackdrop: {
     flex: 1,

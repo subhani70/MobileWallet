@@ -184,7 +184,13 @@ export const sendVw = async (toAddress, amountInVw) => {
     const tx = { to: toAddress, value: ethers.parseEther(amountInVw) };
     const txResponse = await wallet.sendTransaction(tx);
     const receipt = await txResponse.wait();
-    return { success: true, receipt };
+    return {
+      success: true,
+      receipt,
+      hash: txResponse.hash,
+      to: toAddress,
+      amount: amountInVw,
+    };
   } catch (error) {
     let friendlyError = error.message;
     if (error.code === 'INSUFFICIENT_FUNDS') {
@@ -204,7 +210,14 @@ export const sendTokenByAddress = async (address, decimals, toAddress, amountInT
     
     const txResponse = await contract.transfer(toAddress, amount);
     const receipt = await txResponse.wait();
-    return { success: true, receipt };
+    return {
+      success: true,
+      receipt,
+      hash: txResponse.hash,
+      to: toAddress,
+      amount: amountInTokens,
+      tokenAddress: address,
+    };
   } catch (error) {
     let friendlyError = error.message;
     if (error.code === 'INSUFFICIENT_FUNDS') {
