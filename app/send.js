@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -10,7 +10,9 @@ import {
   KeyboardAvoidingView,
   Platform,
   ScrollView,
+  Keyboard,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useFocusEffect } from '@react-navigation/native';
@@ -25,6 +27,11 @@ import { DEFAULT_NETWORK } from '../constants/networks';
 export default function SendScreen() {
   const router = useRouter();
   const { theme } = useTheme();
+  const insets = useSafeAreaInsets();
+  const scrollViewRef = useRef(null);
+  const recipientInputRef = useRef(null);
+  const amountInputRef = useRef(null);
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
   const [recipient, setRecipient] = useState('');
   const [amount, setAmount] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -32,6 +39,26 @@ export default function SendScreen() {
   const [network, setNetwork] = useState(null);
   const [assets, setAssets] = useState([]);
   const [selectedAsset, setSelectedAsset] = useState(null);
+
+  useEffect(() => {
+    const keyboardWillShow = Keyboard.addListener(
+      Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow',
+      (e) => {
+        setKeyboardHeight(e.endCoordinates.height);
+      }
+    );
+    const keyboardWillHide = Keyboard.addListener(
+      Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide',
+      () => {
+        setKeyboardHeight(0);
+      }
+    );
+
+    return () => {
+      keyboardWillShow.remove();
+      keyboardWillHide.remove();
+    };
+  }, []);
 
   const loadAccount = useCallback(async () => {
     try {
@@ -182,12 +209,32 @@ export default function SendScreen() {
       ? `${account.address.substring(0, 10)}...${account.address.substring(account.address.length - 8)}`
       : account?.address;
 
+  const handleInputFocus = (inputRef) => {
+    setTimeout(() => {
+      inputRef.current?.measure((x, y, width, height, pageX, pageY) => {
+        scrollViewRef.current?.scrollTo({
+          y: Math.max(0, pageY - 150),
+          animated: true,
+        });
+      });
+    }, Platform.OS === 'ios' ? 250 : 100);
+  };
+
   return (
     <KeyboardAvoidingView
       style={[styles.container, { backgroundColor: theme.background }]}
-      behavior={Platform.select({ ios: 'padding', android: undefined })}
+      behavior={Platform.select({ ios: 'padding', android: 'padding' })}
+      keyboardVerticalOffset={Platform.select({ ios: 0, android: 20 })}
     >
-      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+      <ScrollView
+        ref={scrollViewRef}
+        contentContainerStyle={[
+          styles.content,
+          { paddingBottom: Math.max(40, keyboardHeight + 20) },
+        ]}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={true}
+      >
         <View style={styles.header}>
           <TouchableOpacity style={[styles.backButton, { borderColor: theme.border }]} onPress={() => router.back()}>
             <Ionicons name="chevron-back" size={20} color={theme.text} />
@@ -249,24 +296,28 @@ export default function SendScreen() {
         <View style={styles.fieldGroup}>
           <Text style={[styles.label, { color: theme.textSecondary }]}>Recipient Address</Text>
           <TextInput
+            ref={recipientInputRef}
             style={[styles.input, { borderColor: theme.border, color: theme.text, backgroundColor: theme.surface }]}
             placeholder="0x1234..."
             placeholderTextColor={theme.textTertiary}
             autoCapitalize="none"
             value={recipient}
             onChangeText={setRecipient}
+            onFocus={() => handleInputFocus(recipientInputRef)}
           />
         </View>
 
         <View style={styles.fieldGroup}>
           <Text style={[styles.label, { color: theme.textSecondary }]}>Amount ({assetSymbol})</Text>
           <TextInput
+            ref={amountInputRef}
             style={[styles.input, { borderColor: theme.border, color: theme.text, backgroundColor: theme.surface }]}
             placeholder="0.00"
             placeholderTextColor={theme.textTertiary}
             keyboardType="decimal-pad"
             value={amount}
             onChangeText={setAmount}
+            onFocus={() => handleInputFocus(amountInputRef)}
           />
         </View>
 

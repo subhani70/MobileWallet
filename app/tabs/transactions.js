@@ -8,7 +8,6 @@ import {
   ScrollView,
   RefreshControl,
   Animated,
-  StatusBar,
   Modal,
   TextInput,
 } from 'react-native';
@@ -196,15 +195,24 @@ export default function TransactionsTab() {
   }, [loadCustomTokens]);
 
   const loadActivityLog = useCallback(async () => {
-    if (!selectedNetwork?.id || !address) {
+    if (!selectedNetwork?.id) {
       setActivityEntries([]);
       return;
     }
     setIsLoadingActivity(true);
     try {
+      // Get the active account address directly to ensure we use the current account
+      const activeAccount = await accountManager.getActiveAccount();
+      const accountAddress = activeAccount?.address || address;
+      
+      if (!accountAddress) {
+        setActivityEntries([]);
+        return;
+      }
+      
       const history = await getActivityForAccount({
         networkId: selectedNetwork.id,
-        accountAddress: address,
+        accountAddress: accountAddress,
         limit: 25,
       });
       setActivityEntries(history);
@@ -656,7 +664,6 @@ export default function TransactionsTab() {
           </Animated.View>
         </View>
       )}
-      <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
       <ScrollView
         style={styles.scrollView}
         contentContainerStyle={styles.scrollContent}

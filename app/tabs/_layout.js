@@ -1,17 +1,15 @@
 // app/tabs/_layout.js
 import { Tabs } from 'expo-router';
-import { View, StyleSheet, StatusBar } from 'react-native';
+import { View, StyleSheet } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Home, FileText, QrCode, Clock, User, Send } from 'lucide-react-native';
 import { useTheme } from '../../contexts/ThemeContext'; // or '../../contexts/ThemeContext'
 
 export default function TabLayout() {
   const { theme, isDark } = useTheme();
-  const statusBarStyle = isDark ? 'light-content' : 'dark-content';
 
   return (
     <>
-      <StatusBar barStyle={statusBarStyle} backgroundColor={theme.background} />
       <Tabs
         screenOptions={{
           headerShown: false,

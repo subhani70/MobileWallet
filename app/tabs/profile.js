@@ -10,6 +10,7 @@ import {
   Alert,
   ActivityIndicator,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Clipboard from 'expo-clipboard';
 import { Shield, Eye, EyeOff, KeyRound, Fingerprint, RefreshCcw, Users, Plus, Check, Edit2, Trash2, Copy } from 'lucide-react-native';
 import { useRouter } from 'expo-router';
@@ -88,6 +89,7 @@ const sanitizeSecrets = ({ address, did, publicKey, privateKey }) => {
 export default function ProfileTab() {
   const router = useRouter();
   const { theme, themeMode, setThemeMode, isDark } = useTheme();
+  const insets = useSafeAreaInsets();
   const [isUnlocked, setIsUnlocked] = useState(false);
   const [authSheetVisible, setAuthSheetVisible] = useState(false);
   const [pinModalVisible, setPinModalVisible] = useState(false);
@@ -307,7 +309,10 @@ export default function ProfileTab() {
   );
 
   return (
-    <ScrollView style={{ flex: 1, backgroundColor: theme.background }} contentContainerStyle={styles.scrollContent}>
+    <ScrollView 
+      style={{ flex: 1, backgroundColor: theme.background }} 
+      contentContainerStyle={[styles.scrollContent, { paddingTop: insets.top + 20 }]}
+    >
       <View style={[styles.header, { borderColor: theme.border }]}>
         <View style={styles.headerIcon}>
           <Shield color={theme.primary} size={32} />
@@ -784,7 +789,7 @@ function RecoveryModal({ visible, onClose, onSubmit, theme, busy, onForgot }) {
 }
 
 const styles = StyleSheet.create({
-  scrollContent: { padding: 20, paddingBottom: 40, gap: 16 },
+  scrollContent: { paddingHorizontal: 20, paddingBottom: 40, gap: 16 },
   header: {
     flexDirection: 'row',
     alignItems: 'center',

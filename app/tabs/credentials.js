@@ -10,7 +10,6 @@ import {
   TouchableOpacity,
   Animated,
   RefreshControl,
-  StatusBar,
   Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -317,8 +316,6 @@ export default function CredentialsScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
-      <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
-      
       {renderHeader()}
       
       <ScrollView

@@ -85,6 +85,7 @@ function ThemedRootNavigator() {
         barStyle={isDark ? 'light-content' : 'dark-content'}
         backgroundColor={theme.background}
         translucent={false}
+        animated={true}
       />
       <Stack
         screenOptions={{
